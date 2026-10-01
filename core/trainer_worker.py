@@ -16,6 +16,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from trl import SFTConfig, SFTTrainer
+from transformers import TrainerCallback
 
 from configs.safe_defaults import (
     DEFAULT_BATCH_SIZE,
@@ -29,6 +30,7 @@ from configs.safe_defaults import (
     SEED,
     WARMUP_RATIO,
 )
+from core.ipc_bridge import error_msg, log_msg, metric_msg, status_msg
 
 
 def build_training_args(
@@ -138,3 +140,51 @@ class AtomicSaveTrainer(SFTTrainer):
         tmp = f"{output_dir}.saving"
         super()._save(tmp, state_dict)
         commit_checkpoint(Path(tmp), Path(output_dir))
+
+
+class StreamToQueueCallback(TrainerCallback):
+    """ส่ง metric/log/status/error จาก trainer ลง Queue ให้ UI อ่าน (สเปก §4.5)
+
+    NaN guard: loss non-finite ติดต่อกันครบ threshold → error + status aborted + หยุดเทรน
+    (เมื่อ aborted แล้ว: on_train_begin/on_train_end จะไม่ส่ง status ทับ)
+    """
+
+    def __init__(self, queue):
+        self.queue = queue
+        self.guard = NanGuard()
+        self.aborted = False
+
+    def on_log(self, args, state, control, logs, **kwargs):
+        if "loss" not in logs:
+            self.queue.put(log_msg("INFO", str(logs)))
+            return
+        loss = logs["loss"]
+        self.queue.put(
+            metric_msg(
+                step=logs.get("step", state.global_step),
+                loss=loss,
+                lr=logs.get("learning_rate", 0.0),
+                epoch=logs.get("epoch", 0.0),
+            )
+        )
+        if self.guard.register(loss):
+            self.queue.put(
+                error_msg(
+                    f"loss non-finite ติดต่อกัน {self.guard.threshold} ครั้ง — abort",
+                    "",
+                )
+            )
+            self.queue.put(status_msg("aborted"))
+            self.aborted = True
+            control.should_training_stop = True
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        if not self.aborted:
+            self.queue.put(status_msg("training"))
+
+    def on_save(self, args, state, control, **kwargs):
+        self.queue.put(status_msg("saving"))
+
+    def on_train_end(self, args, state, control, **kwargs):
+        if not self.aborted:
+            self.queue.put(status_msg("finished"))
