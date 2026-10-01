@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Project artifacts (สร้างระหว่างใช้งาน — ไม่ commit)
+exports/
+data_cache/
+
+# Testing & tooling
+.pytest_cache/
+.ruff_cache/
+
+# Worktrees (จัดการโดย git worktree — ห้าม commit เด็ดขาด)
+.worktrees
+
+# OS
+.DS_Store
