@@ -60,10 +60,11 @@ def test_build_dashboard_locks_exist():
     """ปุ่ม Predict/Merge ต้องถูกสร้าง (interactivity อัปเดตโดย tick — Task 1/2)"""
     demo = build_dashboard(FakeController())
     buttons = [b for b in _iter_blocks(demo) if isinstance(b, gr.Button)]
-    labels = {b.label for b in buttons}
+    # gradio 6: ข้อความปุ่มอยู่ที่ .value (label ถูกใช้กับ event metadata)
+    labels = {b.value for b in buttons}
     assert "Predict Middle" in labels
     assert "Merge & Export Full Weights" in labels
     assert "Start Fine-Tuning" in labels
     assert "Abort Process" in labels
-    start = next(b for b in buttons if b.label == "Start Fine-Tuning")
+    start = next(b for b in buttons if b.value == "Start Fine-Tuning")
     assert start.interactive is False  # ยังไม่ผ่าน preflight → ปิดอยู่

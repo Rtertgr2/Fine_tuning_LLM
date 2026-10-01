@@ -8,6 +8,7 @@ accelerate>=0.33.0
 
 # UI & Monitoring
 gradio>=4.40.0
+matplotlib>=3.8.0       # gr.Plot วาด Loss+LR ใน Mission Control (Phase 4)
 psutil>=5.9.0
 
 # Numerical & Data Processing

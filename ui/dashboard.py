@@ -71,9 +71,118 @@ def _collect_config(
     return config, user_params
 
 
+# --------------------------------------------------------------------------- #
+# Handlers — closure รอบ controller, ไม่อ้าง widget (รับค่าผ่าน *args)
+# สร้างนอก `with gr.Blocks()` แล้ว wire ด้วย .click/.tick ข้างใน context
+# --------------------------------------------------------------------------- #
+
+
+def _make_handlers(controller) -> dict:
+    def on_check(*cfg_values):
+        config, user_params = _collect_config(*cfg_values)
+        result = controller.preflight(config, user_params)
+        _label, color = verdict_style(result.verdict)
+        breakdown = "\n".join(
+            f"| {name} | {value:.2f} |"
+            for name, value in (
+                ("weights", result.weights_gb),
+                ("trainable", result.trainable_gb),
+                ("activations", result.activations_gb),
+                ("overhead", result.overhead_gb),
+                ("**total required**", result.total_required_gb),
+                ("**free VRAM**", result.free_vram_gb),
+            )
+        )
+        md = (
+            f"### Environment Check\n"
+            f'<span style="color:{color};font-weight:bold">● {result.verdict}</span>'
+            f" — {result.reason}  \n"
+            f"spec source: `{result.spec_source}`\n\n"
+            f"| Component | GB |\n|---|---|\n{breakdown}"
+        )
+        allowed = result.verdict in _START_VERDICTS
+        return md, result.verdict, gr.Button(interactive=allowed)
+
+    def on_start(*cfg_values):
+        config, _user_params = _collect_config(*cfg_values)
+        result = controller.start(config)
+        if result == "started":
+            return ""
+        return f'<span style="color:#dc2626">**Error:** {result}</span>'
+
+    def on_abort():
+        if controller.abort():
+            return '<span style="color:#ca8a04">Aborting… (SIGTERM → SIGKILL ถ้ายังไม่ตาย)</span>'
+        return '<span style="color:#6b7280">ไม่มี process ที่ต้องหยุด</span>'
+
+    def on_tick(verdict):
+        snap = controller.tick()
+        color = _STATUS_COLORS.get(snap.status, "#6b7280")
+        status_md = (
+            f'**Status:** <span style="color:{color}">{snap.status.upper()}</span>'
+        )
+        fig = build_metric_plot(snap.metrics)
+        logs = "\n".join(snap.logs[-_LOG_TAIL_LINES:])
+        banners = []
+        if snap.error:
+            banners.append(
+                f'<span style="color:#dc2626">**Error:** {snap.error}</span>'
+            )
+        if snap.watchdog:
+            banners.append(
+                f'<span style="color:#dc2626">**Watchdog:** {snap.watchdog}</span>'
+            )
+        ta = snap.training_active
+        allow_start = (not ta) and verdict in _START_VERDICTS
+        return (
+            status_md,
+            fig,
+            logs,
+            "\n\n".join(banners),
+            gr.Button(interactive=allow_start),
+            gr.Button(interactive=ta),
+            gr.Button(interactive=not ta),
+            gr.Button(interactive=not ta),
+        )
+
+    def on_predict(*values):
+        *cfg_values, prefix, suffix = values
+        config, _user_params = _collect_config(*cfg_values)
+        try:
+            return run_predict(config, prefix, suffix), ""
+        except Exception as exc:  # noqa: BLE001 — แสดง error ทุกชนิดใน UI
+            return "", f'<span style="color:#dc2626">**Predict failed:** {exc}</span>'
+
+    def on_save_adapter(output_dir):
+        try:
+            dest = save_adapter_only(output_dir)
+            return f'<span style="color:#16a34a">✅ Adapter saved → `{dest}`</span>'
+        except Exception as exc:  # noqa: BLE001
+            return f'<span style="color:#dc2626">**Save failed:** {exc}</span>'
+
+    def on_merge(*cfg_values):
+        config, _user_params = _collect_config(*cfg_values)
+        try:
+            dest = merge_export(config)
+            return f'<span style="color:#16a34a">✅ Merged weights saved → `{dest}`</span>'
+        except Exception as exc:  # noqa: BLE001
+            return f'<span style="color:#dc2626">**Merge failed:** {exc}</span>'
+
+    return {
+        "on_check": on_check,
+        "on_start": on_start,
+        "on_abort": on_abort,
+        "on_tick": on_tick,
+        "on_predict": on_predict,
+        "on_save_adapter": on_save_adapter,
+        "on_merge": on_merge,
+    }
+
+
 def build_dashboard(controller) -> gr.Blocks:
     """สร้าง Blocks ทั้ง 3 แท็บแล้ว wire events เข้า `controller` — ไม่มีการเรียก controller ตอนสร้าง"""
     fim_choices = _fim_choices()
+    h = _make_handlers(controller)
 
     with gr.Blocks(title="Code Fine-tuning Control Center") as demo:
         verdict_state = gr.State(None)  # ผล preflight ล่าสุด — ใช้ gate ปุ่ม Start
@@ -91,11 +200,14 @@ def build_dashboard(controller) -> gr.Blocks:
                         label="Model",
                     )
                     params_in = gr.Number(
-                        value=None, label="Parameters (B) — fallback เมื่อดึง config ไม่ได้"
+                        value=None,
+                        label="Parameters (B) — fallback เมื่อดึง config ไม่ได้",
                     )
                 with gr.Row():
                     dataset_in = gr.Textbox(value=DEFAULT_DATASET_ID, label="Dataset ID")
-                    column_in = gr.Textbox(value=DEFAULT_DATASET_COLUMN, label="Code column")
+                    column_in = gr.Textbox(
+                        value=DEFAULT_DATASET_COLUMN, label="Code column"
+                    )
                     fim_in = gr.Dropdown(
                         choices=fim_choices,
                         value="qwen" if "qwen" in fim_choices else fim_choices[0],
@@ -111,13 +223,14 @@ def build_dashboard(controller) -> gr.Blocks:
                         value=MAX_SEQ_LENGTH_DEFAULT, label="Max seq length",
                         elem_id="max-seq-length",
                     )
-                    steps_in = gr.Number(value=MAX_STEPS, precision=0, label="Max steps")
+                    steps_in = gr.Number(
+                        value=MAX_STEPS, precision=0, label="Max steps"
+                    )
                     code_limit_in = gr.Number(
                         value=TRAIN_CODE_LIMIT, precision=0, label="Code limit"
                     )
                     output_in = gr.Textbox(value=_DEFAULT_OUTPUT_DIR, label="Output dir")
-                with gr.Row():
-                    check_btn = gr.Button("Run Environment Check", variant="secondary")
+                check_btn = gr.Button("Run Environment Check", variant="secondary")
                 gauge_md = gr.Markdown(
                     "_ยังไม่ได้ตรวจ — กด Run Environment Check ก่อนเริ่มเทรน_"
                 )
@@ -130,13 +243,14 @@ def build_dashboard(controller) -> gr.Blocks:
                     start_btn = gr.Button(
                         "Start Fine-Tuning", variant="primary", interactive=False
                     )
-                    abort_btn = gr.Button("Abort Process", variant="stop", interactive=False)
+                    abort_btn = gr.Button(
+                        "Abort Process", variant="stop", interactive=False
+                    )
                 status_md = gr.Markdown("**Status:** Idle")
                 start_error_md = gr.Markdown("")
                 plot_out = gr.Plot(label="Loss + LR")
                 log_out = gr.Textbox(
-                    label="Live Log", lines=16, max_lines=16, interactive=False,
-                    show_copy_button=True,
+                    label="Live Log", lines=16, max_lines=16, interactive=False
                 )
 
             # ---------------------------------------------------------- #
@@ -147,135 +261,45 @@ def build_dashboard(controller) -> gr.Blocks:
                 suffix_in = gr.Code(label="Suffix", language="python", lines=6)
                 predict_btn = gr.Button("Predict Middle", variant="secondary")
                 predict_out = gr.Code(
-                    label="Predicted middle", language="python", interactive=False, lines=8
+                    label="Predicted middle", language="python",
+                    interactive=False, lines=8,
                 )
                 predict_error_md = gr.Markdown("")
                 with gr.Row():
                     save_btn = gr.Button("Save Adapter Only", variant="secondary")
-                    merge_btn = gr.Button("Merge & Export Full Weights", variant="primary")
+                    merge_btn = gr.Button(
+                        "Merge & Export Full Weights", variant="primary"
+                    )
                 export_msg = gr.Markdown("")
 
         timer = gr.Timer(value=1.0, active=True)
 
-    # ------------------------------------------------------------------ #
-    # Wiring — handlers เป็น closure รอบ controller (state ไม่อยู่ในไฟล์นี้)
-    # ------------------------------------------------------------------ #
-    cfg_inputs = [
-        model_in, params_in, dataset_in, column_in, fim_in,
-        lora_in, seq_in, steps_in, code_limit_in, output_in,
-    ]
+        # -------------------------------------------------------------- #
+        # Wiring (ต้องอยู่ใน Blocks context — gradio 6 บังคับ)
+        # -------------------------------------------------------------- #
+        cfg_inputs = [
+            model_in, params_in, dataset_in, column_in, fim_in,
+            lora_in, seq_in, steps_in, code_limit_in, output_in,
+        ]
 
-    def _on_check(*cfg_values):
-        config, user_params = _collect_config(*cfg_values)
-        result = controller.preflight(config, user_params)
-        _label, color = verdict_style(result.verdict)
-        breakdown = "\n".join(
-            f"| {name} | {value:.2f} |"
-            for name, value in (
-                ("weights", result.weights_gb),
-                ("trainable", result.trainable_gb),
-                ("activations", result.activations_gb),
-                ("overhead", result.overhead_gb),
-                ("**total required**", result.total_required_gb),
-                ("**free VRAM**", result.free_vram_gb),
-            )
+        check_btn.click(
+            h["on_check"], inputs=cfg_inputs,
+            outputs=[gauge_md, verdict_state, start_btn],
         )
-        md = (
-            f'### Environment Check\n'
-            f'<span style="color:{color};font-weight:bold">● {result.verdict}</span>'
-            f" — {result.reason}  \n"
-            f"spec source: `{result.spec_source}`\n\n"
-            f"| Component | GB |\n|---|---|\n{breakdown}"
+        start_btn.click(h["on_start"], inputs=cfg_inputs, outputs=[start_error_md])
+        abort_btn.click(h["on_abort"], inputs=[], outputs=[start_error_md])
+        timer.tick(
+            h["on_tick"], inputs=[verdict_state],
+            outputs=[
+                status_md, plot_out, log_out, start_error_md,
+                start_btn, abort_btn, predict_btn, merge_btn,
+            ],
         )
-        allowed = result.verdict in _START_VERDICTS
-        return md, result.verdict, gr.Button(interactive=allowed)
-
-    check_btn.click(
-        _on_check, inputs=cfg_inputs, outputs=[gauge_md, verdict_state, start_btn]
-    )
-
-    def _on_start(*cfg_values):
-        config, _user_params = _collect_config(*cfg_values)
-        result = controller.start(config)
-        if result == "started":
-            return ""
-        return f'<span style="color:#dc2626">**Error:** {result}</span>'
-
-    start_btn.click(_on_start, inputs=cfg_inputs, outputs=[start_error_md])
-
-    def _on_abort():
-        if controller.abort():
-            return '<span style="color:#ca8a04">Aborting… (SIGTERM → SIGKILL ถ้ายังไม่ตาย)</span>'
-        return '<span style="color:#6b7280">ไม่มี process ที่ต้องหยุด</span>'
-
-    abort_btn.click(_on_abort, inputs=[], outputs=[start_error_md])
-
-    def _on_tick(verdict):
-        snap = controller.tick()
-        color = _STATUS_COLORS.get(snap.status, "#6b7280")
-        status_md_html = f'**Status:** <span style="color:{color}">{snap.status.upper()}</span>'
-        fig = build_metric_plot(snap.metrics)
-        logs = "\n".join(snap.logs[-_LOG_TAIL_LINES:])
-        banners = []
-        if snap.error:
-            banners.append(f'<span style="color:#dc2626">**Error:** {snap.error}</span>')
-        if snap.watchdog:
-            banners.append(
-                f'<span style="color:#dc2626">**Watchdog:** {snap.watchdog}</span>'
-            )
-        ta = snap.training_active
-        allow_start = (not ta) and verdict in _START_VERDICTS
-        return (
-            status_md_html,
-            fig,
-            logs,
-            "\n\n".join(banners),
-            gr.Button(interactive=allow_start),
-            gr.Button(interactive=ta),
-            gr.Button(interactive=not ta),
-            gr.Button(interactive=not ta),
+        predict_btn.click(
+            h["on_predict"], inputs=cfg_inputs + [prefix_in, suffix_in],
+            outputs=[predict_out, predict_error_md],
         )
-
-    timer.tick(
-        _on_tick,
-        inputs=[verdict_state],
-        outputs=[
-            status_md, plot_out, log_out, start_error_md,
-            start_btn, abort_btn, predict_btn, merge_btn,
-        ],
-    )
-
-    def _on_predict(*values):
-        *cfg_values, prefix, suffix = values
-        config, _user_params = _collect_config(*cfg_values)
-        try:
-            return run_predict(config, prefix, suffix), ""
-        except Exception as exc:  # noqa: BLE001 — แสดง error ทุกชนิดใน UI
-            return "", f'<span style="color:#dc2626">**Predict failed:** {exc}</span>'
-
-    predict_btn.click(
-        _on_predict,
-        inputs=cfg_inputs + [prefix_in, suffix_in],
-        outputs=[predict_out, predict_error_md],
-    )
-
-    def _on_save_adapter(output_dir):
-        try:
-            dest = save_adapter_only(output_dir)
-            return f'<span style="color:#16a34a">✅ Adapter saved → `{dest}`</span>'
-        except Exception as exc:  # noqa: BLE001
-            return f'<span style="color:#dc2626">**Save failed:** {exc}</span>'
-
-    save_btn.click(_on_save_adapter, inputs=[output_in], outputs=[export_msg])
-
-    def _on_merge(*cfg_values):
-        config, _user_params = _collect_config(*cfg_values)
-        try:
-            dest = merge_export(config)
-            return f'<span style="color:#16a34a">✅ Merged weights saved → `{dest}`</span>'
-        except Exception as exc:  # noqa: BLE001
-            return f'<span style="color:#dc2626">**Merge failed:** {exc}</span>'
-
-    merge_btn.click(_on_merge, inputs=cfg_inputs, outputs=[export_msg])
+        save_btn.click(h["on_save_adapter"], inputs=[output_in], outputs=[export_msg])
+        merge_btn.click(h["on_merge"], inputs=cfg_inputs, outputs=[export_msg])
 
     return demo

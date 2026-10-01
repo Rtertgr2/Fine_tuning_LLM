@@ -328,3 +328,11 @@ def test_run_predict_error_raises():
             valid_config(), "a", "b",
             timeout=1.0, process_factory=factory, queue_factory=lambda: fq,
         )
+
+
+def test_preflight_output_dir_not_created_yet(tmp_path):
+    """Regression: output_dir ยังไม่ถูกสร้าง (fresh start) → preflight ต้องไม่ crash FileNotFoundError"""
+    ctl, _fp, _state = make_controller()
+    cfg = valid_config(output_dir=str(tmp_path / "not_yet_created" / "run"))
+    result = ctl.preflight(cfg)  # inspect ต้องใช้ ancestor ที่มีอยู่จริง
+    assert result.verdict in ("safe", "warning", "blocked", "no_xpu", "insufficient_ram", "insufficient_disk")

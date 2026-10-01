@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import threading
+from pathlib import Path
 from queue import Empty
 from typing import NamedTuple
 
@@ -75,7 +76,11 @@ class TrainingController:
 
         verdict ที่ไม่ใช่ safe/warning (blocked/no_xpu/insufficient_*) → dashboard ปิดปุ่ม Start
         """
-        hw = hardware.inspect(output_dir=config.get("output_dir", "."))
+        # output_dir อาจยังไม่ถูกสร้าง (fresh start) — ใช้ ancestor ที่มีอยู่จริงแทน (disk อยู่ volume เดียวกัน)
+        out_dir = Path(config.get("output_dir", "."))
+        while not out_dir.exists() and out_dir != out_dir.parent:
+            out_dir = out_dir.parent
+        hw = hardware.inspect(output_dir=str(out_dir))
         return estimate(
             hw,
             model_id=config["model_id"],
