@@ -17,9 +17,16 @@ from ui.controller import TrainingController
 class FakeProcess:
     """duck-typed เหมือน `multiprocessing.Process` ที่ controller/abort_process ใช้"""
 
-    def __init__(self, *, alive: bool = False, dies_on_terminate: bool = True):
+    def __init__(
+        self,
+        *,
+        alive: bool = False,
+        dies_on_terminate: bool = True,
+        dies_on_kill: bool = True,
+    ):
         self.alive = alive
         self.dies_on_terminate = dies_on_terminate
+        self.dies_on_kill = dies_on_kill
         self.started = False
         self.terminate_calls = 0
         self.kill_calls = 0
@@ -39,7 +46,8 @@ class FakeProcess:
 
     def kill(self) -> None:
         self.kill_calls += 1
-        self.alive = False
+        if self.dies_on_kill:
+            self.alive = False
 
     def join(self, timeout: float | None = None) -> None:
         return None
@@ -65,7 +73,7 @@ def make_controller(messages: list | None = None, *, process: FakeProcess | None
     """คืน (controller, fake_process, process_call_state) — queue ถูก pre-load ด้วย messages"""
     fq = FakeQueue(messages)
     fp = process if process is not None else FakeProcess()
-    state = {"process_calls": 0}
+    state = {"process_calls": 0, "queue": fq}
 
     def process_factory(target, args):
         state["process_calls"] += 1
@@ -104,7 +112,7 @@ def valid_config(**overrides) -> dict:
 def test_start_rejects_invalid_config():
     ctl, _fp, state = make_controller()
     result = ctl.start({"model_id": "x"})
-    assert "config ขาด key" in result
+    assert "missing key" in result
     assert "dataset_id" in result
     assert state["process_calls"] == 0  # ไม่มี spawn
     assert ctl.training_active is False
@@ -261,12 +269,12 @@ def test_abort_kills_and_marks_terminal():
 def test_zombie_watchdog_after_drain():
     """Review Focus 2: process ตายแต่ queue มี error ค้าง → error ถูกส่งก่อน + watchdog ขึ้น"""
     fp = FakeProcess(alive=False)  # ตายแล้วตั้งแต่ก่อน start tick
-    ctl, _fp, _state = make_controller(
-        messages=[status_msg("training"), error_msg("boom", "tb-line")],
-        process=fp,
-    )
+    ctl, _fp, state = make_controller(process=fp)
     ctl.start(valid_config())
-    # start() สร้าง status="starting"; drain จะอัปเดตเป็น training แล้วเจอ error
+    # start() drain queue เก่าทิ้ง (I4) — msg ของรันปัจจุบันต้อง inject หลัง start
+    state["queue"].messages.extend(
+        [status_msg("training"), error_msg("boom", "tb-line")]
+    )
     snap = ctl.tick()
     assert snap.error == "boom"  # drain ก่อนตัดสิน
     assert "tb-line" in snap.logs
@@ -290,39 +298,54 @@ def test_exit_terminates_child():
 
 
 def _predict_factory(queue_msgs, *, alive=True):
-    """คืน (process_factory, fake_predict_queue) สำหรับ run_predict"""
+    """คืน (process_factory, fake_predict_queue, fake_process) สำหรับ run_predict"""
     fq = FakeQueue(queue_msgs)
+    holder = {}
 
     def process_factory(target, args):
-        fp = FakeProcess(alive=alive)
+        fp = FakeProcess(alive=alive, dies_on_terminate=True)
         fp.target = target
         fp.args = args
+        holder["process"] = fp
         return fp
 
-    return process_factory, fq
+    return process_factory, fq, holder
 
 
 def test_run_predict_success_returns_text():
-    factory, fq = _predict_factory([log_msg("INFO", "def f(): pass")])
+    factory, fq, _h = _predict_factory([log_msg("INFO", "def f(): pass")])
     result = ui_controller.run_predict(
         valid_config(), "def f():", "return 1",
         timeout=1.0, process_factory=factory, queue_factory=lambda: fq,
     )
     assert result == "def f(): pass"
+    # success ก็ต้องไม่ปล่อย child ลอย (finally เก็บเสมอ — I3)
+    assert _h["process"].is_alive() is False
 
 
-def test_run_predict_timeout_raises():
-    """Review Focus 4: queue ว่าง + process ตาย → RuntimeError ไม่ใช่ hang"""
-    factory, fq = _predict_factory([], alive=False)
+def test_run_predict_timeout_raises_and_kills_child():
+    """Review Focus 4 + I3: queue ว่าง + child ยังอยู่ → RuntimeError ทันที + ถูก kill"""
+    factory, fq, holder = _predict_factory([], alive=True)
     with pytest.raises(RuntimeError, match="timeout"):
         ui_controller.run_predict(
             valid_config(), "a", "b",
             timeout=0.1, process_factory=factory, queue_factory=lambda: fq,
         )
+    assert holder["process"].terminate_calls == 1  # ไม่มี orphan (I3)
+
+
+def test_run_predict_dead_child_raises_fast():
+    """M1: child ตายเงียบ → RuntimeError บอกชัด ไม่ต้องรอจนหมด timeout"""
+    factory, fq, _h = _predict_factory([], alive=False)
+    with pytest.raises(RuntimeError, match="died"):
+        ui_controller.run_predict(
+            valid_config(), "a", "b",
+            timeout=30.0, process_factory=factory, queue_factory=lambda: fq,
+        )
 
 
 def test_run_predict_error_raises():
-    factory, fq = _predict_factory([error_msg("no adapter", "")])
+    factory, fq, _h = _predict_factory([error_msg("no adapter", "")])
     with pytest.raises(RuntimeError, match="no adapter"):
         ui_controller.run_predict(
             valid_config(), "a", "b",
@@ -336,3 +359,62 @@ def test_preflight_output_dir_not_created_yet(tmp_path):
     cfg = valid_config(output_dir=str(tmp_path / "not_yet_created" / "run"))
     result = ctl.preflight(cfg)  # inspect ต้องใช้ ancestor ที่มีอยู่จริง
     assert result.verdict in ("safe", "warning", "blocked", "no_xpu", "insufficient_ram", "insufficient_disk")
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: I2 (re-entrancy), I4 (run state reset), I5 (broken queue),
+#               M8 (abort escalation failure)
+# ---------------------------------------------------------------------------
+
+
+def test_start_refused_while_training():
+    """I2: start ซ้ำระหว่าง training → ไม่ spawn process ที่สอง (§5 Process Stacking)"""
+    ctl, _fp, state = make_controller()
+    assert ctl.start(valid_config()) == "started"
+    result = ctl.start(valid_config())
+    assert "already running" in result
+    assert state["process_calls"] == 1  # spawn ครั้งเดียว — ไม่ orphan ตัวแรก
+
+
+def test_start_resets_previous_run_state():
+    """I4: เริ่มรันใหม่ → metrics/logs/error ของรันก่อนถูกล้าง (plot ห้ามปนกัน)"""
+    ctl, _fp, _state = make_controller(
+        messages=[metric_msg(1, 9.9, 2e-4, 0.1), status_msg("finished"),
+                  error_msg("old run error", "tb")]
+    )
+    snap = ctl.tick()
+    assert snap.metrics and snap.error == "old run error"
+    assert ctl.training_active is False  # finished → start ได้อีก
+    assert ctl.start(valid_config()) == "started"
+    snap2 = ctl.tick()
+    assert snap2.metrics == []
+    assert snap2.logs == []
+    assert snap2.error is None
+
+
+class BrokenQueue:
+    """get_nowait คาย EOFError เหมือน pipe ถูก kill กลางเขียน (I5)"""
+
+    def put(self, msg):
+        pass
+
+    def get_nowait(self):
+        raise EOFError("broken pipe")
+
+
+def test_tick_survives_broken_queue():
+    """I5: queue พัง → tick ต้องคืน error ไม่ใช่ raise (ไม่งั้น UI ค้างถาวร)"""
+    ctl = TrainingController(queue_factory=lambda: BrokenQueue())
+    snap = ctl.tick()  # ห้าม raise
+    assert snap.error is not None
+    assert "broken" in snap.error
+
+
+def test_abort_escalation_failure_keeps_lock():
+    """M8: SIGTERM+SIGKILL ไม่ตาย → คืน False + status ถอยกลับ (ปุ่มยังล็อก — process ยังอยู่)"""
+    fp = FakeProcess(alive=True, dies_on_terminate=False, dies_on_kill=False)
+    ctl, _fp, _state = make_controller(process=fp)
+    ctl.start(valid_config())
+    assert ctl.abort() is False
+    assert ctl.training_active is True  # ยังปลดล็อกไม่ได้ (I3/M8)
+    assert fp.is_alive() is True

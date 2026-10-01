@@ -64,7 +64,7 @@ def test_blocked_when_params_unknown(monkeypatch, tmp_path):
     _patch_fetch(monkeypatch, tmp_path, error=OSError("offline"))
     result = est.estimate(_hw_ready(), model_id="acme/offline-model", user_params_b=None)
     assert result.verdict == "blocked"
-    assert "พารามิเตอร์" in result.reason
+    assert "parameter count" in result.reason
 
 
 def test_invalid_user_params_blocked(monkeypatch, tmp_path):
@@ -75,7 +75,7 @@ def test_invalid_user_params_blocked(monkeypatch, tmp_path):
             _hw_ready(), model_id="acme/offline-model", user_params_b=bad
         )
         assert result.verdict == "blocked", bad
-        assert "พารามิเตอร์" in result.reason
+        assert "parameter count" in result.reason
 
 
 def test_user_fallback_params(monkeypatch, tmp_path):

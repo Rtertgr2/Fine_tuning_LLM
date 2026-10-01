@@ -39,7 +39,7 @@ def log_msg(level: str, text: str) -> dict:
 def status_msg(state: str) -> dict:
     if state not in TRAINING_STATUSES:
         raise ValueError(
-            f"สถานะไม่รู้จัก: {state!r} (ต้องเป็นหนึ่งใน {TRAINING_STATUSES})"
+            f"unknown status: {state!r} (must be one of {TRAINING_STATUSES})"
         )
     return {"type": "status", "state": state}
 
@@ -77,7 +77,7 @@ def watchdog_error(process, last_status: str | None) -> dict | None:
     if last_status in TERMINAL_STATUSES:
         return None
     return error_msg(
-        "Training process ตายโดยไม่ได้ส่ง finished/aborted (zombie)",
+        "Training process died without sending finished/aborted (zombie)",
         f"last_status={last_status!r}",
     )
 

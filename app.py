@@ -19,7 +19,7 @@ from ui.controller import TrainingController
 from ui.dashboard import build_dashboard
 
 SERVER_HOST = "127.0.0.1"
-SERVER_PORT = 7860
+SERVER_PORT = 7860  # M10: constants นี้อยู่ตรงนี้ (ไม่ใช่ safe_defaults) เพราะเป็น runtime binding ของ entry point เดียว — spec §4 กำหนดไว้แล้ว
 
 
 def main() -> None:

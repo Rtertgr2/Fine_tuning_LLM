@@ -62,15 +62,15 @@ class EstimateResult(NamedTuple):
 
 
 _PASSTHROUGH_REASONS = {
-    "no_xpu": "ไม่พบอุปกรณ์ XPU",
-    "insufficient_ram": f"RAM ว่างไม่พอ (ต่ำกว่า {RAM_MIN_GB} GB)",
-    "insufficient_disk": f"ดิสก์ว่างไม่พอ (ต่ำกว่า {DISK_MIN_GB} GB)",
+    "no_xpu": "XPU device not found",
+    "insufficient_ram": f"Insufficient free RAM (below {RAM_MIN_GB} GB)",
+    "insufficient_disk": f"Insufficient free disk (below {DISK_MIN_GB} GB)",
 }
 
 _VERDICT_REASONS = {
-    "safe": f"ปลอดภัย — ใช้ ≤ {VRAM_SAFE_RATIO:.0%} ของ VRAM ว่าง",
-    "warning": f"ระวัง — ใช้ {VRAM_SAFE_RATIO:.0%}–{VRAM_WARNING_RATIO:.0%} ของ VRAM ว่าง",
-    "blocked": f"บล็อก — ต้องการทรัพยากรเกิน {VRAM_WARNING_RATIO:.0%} ของ VRAM ว่าง",
+    "safe": f"Safe — uses ≤ {VRAM_SAFE_RATIO:.0%} of free VRAM",
+    "warning": f"Caution — uses {VRAM_SAFE_RATIO:.0%}–{VRAM_WARNING_RATIO:.0%} of free VRAM",
+    "blocked": f"Blocked — requires more than {VRAM_WARNING_RATIO:.0%} of free VRAM",
 }
 
 
@@ -142,7 +142,7 @@ def estimate(
     except ModelSpecUnavailable:
         return EstimateResult(
             "blocked",
-            "ไม่ทราบจำนวนพารามิเตอร์ — ต้องกรอก P (B) ใน UI (ห้ามเดา)",
+            "Unknown parameter count — enter Parameters (B) in the UI (guessing is not allowed)",
             0.0, 0.0, 0.0, 0.0, 0.0, free, "",
         )
 

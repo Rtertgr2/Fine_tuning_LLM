@@ -104,18 +104,18 @@ def ensure_fim_tokens(tokenizer, fim_tokens: Iterable[str]) -> dict[str, int]:
     for tok in fim_tokens:
         tid = tokenizer.convert_tokens_to_ids(tok)
         if tid is None or tid >= len(tokenizer):
-            problems.append(f"{tok} (id={tid} — อยู่นอก vocab)")
+            problems.append(f"{tok} (id={tid} — outside vocab)")
             continue
         if unk is not None and tid == unk:
-            problems.append(f"{tok} (คืนค่า unk_token_id — ไม่ได้อยู่ใน vocab)")
+            problems.append(f"{tok} (maps to unk_token_id — not in vocab)")
             continue
         if tokenizer.convert_ids_to_tokens(tid) != tok:
-            problems.append(f"{tok} (roundtrip ไม่ตรง — ถูก split หรือ mapping ผิด)")
+            problems.append(f"{tok} (roundtrip mismatch — split or mapped wrongly)")
             continue
         ids[tok] = int(tid)
     if problems:
         raise ValueError(
-            "FIM token ขาด/ผิด: " + ", ".join(problems) + " — ต้องแก้ token ก่อนเริ่มเทรน"
+            "FIM token missing/invalid: " + ", ".join(problems) + " — fix tokens before training"
         )
     return ids
 
@@ -196,7 +196,7 @@ class StreamToQueueCallback(TrainerCallback):
         if self.guard.register(loss):
             self.queue.put(
                 error_msg(
-                    f"loss non-finite ติดต่อกัน {self.guard.threshold} ครั้ง — abort",
+                    f"loss non-finite for {self.guard.threshold} consecutive steps — aborting",
                     "",
                 )
             )
@@ -236,11 +236,11 @@ def validate_config(config: dict) -> None:
     """ตรวจ config ก่อนเทรน — ขาด key → ValueError บอกชื่อที่ขาด; seq length ผิด hard cap → ValueError"""
     missing = sorted(REQUIRED_CONFIG_KEYS - config.keys())
     if missing:
-        raise ValueError(f"config ขาด key: {', '.join(missing)}")
+        raise ValueError(f"config missing key: {', '.join(missing)}")
     seq = config["max_seq_length"]
     if not 0 < seq <= MAX_SEQ_LENGTH_CAP:
         raise ValueError(
-            f"max_seq_length={seq} ต้องอยู่ใน (0, {MAX_SEQ_LENGTH_CAP}] (hard cap §5)"
+            f"max_seq_length={seq} must be in (0, {MAX_SEQ_LENGTH_CAP}] (hard cap plan §5)"
         )
 
 
@@ -337,13 +337,11 @@ def latest_checkpoint(output_dir: str | Path) -> Path:
             if best is None or step > best[0]:
                 best = (step, child)
     if best is None:
-        raise ValueError(f"ไม่พบ checkpoint ใน {root}")
+        raise ValueError(f"no checkpoint found in {root}")
     return best[1]
 
 
-def build_fim_prompt(
-    prefix: str, suffix: str, *, fim_tokens: dict, eos: str
-) -> str:
+def build_fim_prompt(prefix: str, suffix: str, *, fim_tokens: dict) -> str:
     """PSM prompt (ไม่มี middle) — model generate ต่อจาก middle_tok เอง"""
     return (
         f"{fim_tokens['prefix']}{prefix}"
@@ -375,13 +373,12 @@ def predict_middle(config: dict, prefix: str, suffix: str, queue_) -> None:
             attn_implementation="sdpa",
         )
         model = PeftModel.from_pretrained(model, str(adapter_dir))
+        device = "xpu" if torch.xpu.is_available() else "cpu"
+        model = model.to(device)
         model.eval()
 
-        prompt = build_fim_prompt(
-            prefix, suffix, fim_tokens=fim_tokens, eos=tokenizer.eos_token or ""
-        )
+        prompt = build_fim_prompt(prefix, suffix, fim_tokens=fim_tokens)
         inputs = tokenizer(prompt, return_tensors="pt")
-        device = "xpu" if torch.xpu.is_available() else "cpu"
         inputs = {k: v.to(device) for k, v in inputs.items()}
         with torch.no_grad():
             output_ids = model.generate(
@@ -400,19 +397,16 @@ def save_adapter_only(
 ) -> Path:
     """คัดลอกเฉพาะไฟล์ LoRA จาก checkpoint ล่าสุด → exports/<output_dir.name>/ (file op ไม่กิน VRAM)"""
     ckpt = latest_checkpoint(output_dir)
+    config_src = ckpt / "adapter_config.json"
+    # sharded weights (adapter_model-00001-of-00002.safetensors) + index ต้องโดนด้วย
+    weight_srcs = sorted(ckpt.glob("adapter_model*.safetensors"))
+    index_srcs = sorted(ckpt.glob("adapter_model*.safetensors.index.json"))
+    if not config_src.exists() or (not weight_srcs and not index_srcs):
+        raise ValueError(f"checkpoint {ckpt} contains no adapter files")
     dest = Path(exports_dir) / Path(output_dir).name
     dest.mkdir(parents=True, exist_ok=True)
-    copied = 0
-    for name in ("adapter_config.json", "adapter_model.safetensors"):
-        src = ckpt / name
-        if src.exists():
-            shutil.copy2(src, dest / name)
-            copied += 1
-    for extra in ckpt.glob("adapter_model*.safetensors.index.json"):
-        shutil.copy2(extra, dest / extra.name)
-        copied += 1
-    if copied == 0:
-        raise ValueError(f"checkpoint {ckpt} ไม่มีไฟล์ adapter")
+    for src in (config_src, *weight_srcs, *index_srcs):
+        shutil.copy2(src, dest / src.name)
     return dest
 
 

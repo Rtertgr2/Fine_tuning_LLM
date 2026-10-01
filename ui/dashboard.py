@@ -25,7 +25,7 @@ from core.trainer_worker import merge_export, save_adapter_only
 from ui.components import build_metric_plot, verdict_style
 from ui.controller import run_predict
 
-_DEFAULT_OUTPUT_DIR = "data_cache/finetune_run"
+_DEFAULT_OUTPUT_DIR = "data_cache/finetune_run"  # spec §4 table default (ไม่อยู่ใน safe_defaults — มีที่เดียว)
 _STATUS_COLORS = {
     "idle": "#6b7280",
     "starting": "#ca8a04",
@@ -62,13 +62,21 @@ def _collect_config(
         "dataset_column": dataset_column,
         "fim_registry_key": fim_key,
         "output_dir": output_dir,
-        "max_seq_length": int(max_seq_length),
-        "max_steps": int(max_steps),
-        "code_limit": int(code_limit),
-        "lora_rank": int(lora_rank),
+        "max_seq_length": _to_int(max_seq_length, MAX_SEQ_LENGTH_DEFAULT),
+        "max_steps": _to_int(max_steps, MAX_STEPS),
+        "code_limit": _to_int(code_limit, TRAIN_CODE_LIMIT),
+        "lora_rank": _to_int(lora_rank, LORA_RANK_DEFAULT),
     }
     user_params = float(params_b) if params_b else None
     return config, user_params
+
+
+def _to_int(value, fallback: int) -> int:
+    """M7: ช่อง Number ถูกล้าง = None → ต้องใช้ default ไม่ใช่ crash int(None)"""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
 
 
 # --------------------------------------------------------------------------- #
@@ -101,7 +109,10 @@ def _make_handlers(controller) -> dict:
             f"| Component | GB |\n|---|---|\n{breakdown}"
         )
         allowed = result.verdict in _START_VERDICTS
-        return md, result.verdict, gr.Button(interactive=allowed)
+        # I2: ระหว่างเทรนห้ามปลดล็อก Start ถึง verdict จะดีแค่ไหน (§5 Process Stacking)
+        return md, result.verdict, gr.Button(
+            interactive=allowed and not controller.training_active
+        )
 
     def on_start(*cfg_values):
         config, _user_params = _collect_config(*cfg_values)
@@ -112,8 +123,8 @@ def _make_handlers(controller) -> dict:
 
     def on_abort():
         if controller.abort():
-            return '<span style="color:#ca8a04">Aborting… (SIGTERM → SIGKILL ถ้ายังไม่ตาย)</span>'
-        return '<span style="color:#6b7280">ไม่มี process ที่ต้องหยุด</span>'
+            return '<span style="color:#ca8a04">Aborting… (SIGTERM → SIGKILL if still alive)</span>'
+        return '<span style="color:#6b7280">No process to abort</span>'
 
     def on_tick(verdict):
         snap = controller.tick()
@@ -122,7 +133,12 @@ def _make_handlers(controller) -> dict:
             f'**Status:** <span style="color:{color}">{snap.status.upper()}</span>'
         )
         fig = build_metric_plot(snap.metrics)
-        logs = "\n".join(snap.logs[-_LOG_TAIL_LINES:])
+        shown = snap.logs[-_LOG_TAIL_LINES:]
+        logs = "\n".join(shown)
+        if len(snap.logs) > _LOG_TAIL_LINES:
+            # M3: บอกให้รู้ว่าถูกตัด — spec ขอ "ครบทุกบรรทัด" แต่ textbox ยาวไม่ได้ (performance)
+            hidden = len(snap.logs) - len(shown)
+            logs = f"… (+{hidden} older lines not shown)\n" + logs
         banners = []
         if snap.error:
             banners.append(
@@ -201,7 +217,7 @@ def build_dashboard(controller) -> gr.Blocks:
                     )
                     params_in = gr.Number(
                         value=None,
-                        label="Parameters (B) — fallback เมื่อดึง config ไม่ได้",
+                        label="Parameters (B) — fallback when config fetch fails",
                     )
                 with gr.Row():
                     dataset_in = gr.Textbox(value=DEFAULT_DATASET_ID, label="Dataset ID")
@@ -232,7 +248,7 @@ def build_dashboard(controller) -> gr.Blocks:
                     output_in = gr.Textbox(value=_DEFAULT_OUTPUT_DIR, label="Output dir")
                 check_btn = gr.Button("Run Environment Check", variant="secondary")
                 gauge_md = gr.Markdown(
-                    "_ยังไม่ได้ตรวจ — กด Run Environment Check ก่อนเริ่มเทรน_"
+                    "_Not checked yet — run Environment Check before starting_"
                 )
 
             # ---------------------------------------------------------- #
@@ -247,7 +263,8 @@ def build_dashboard(controller) -> gr.Blocks:
                         "Abort Process", variant="stop", interactive=False
                     )
                 status_md = gr.Markdown("**Status:** Idle")
-                start_error_md = gr.Markdown("")
+                start_error_md = gr.Markdown("")  # error จากการกด Start/Abort — ห้ามให้ tick ทับ (I1)
+                banner_md = gr.Markdown("")  # error/watchdog จาก tick รีเฟรชทุกวินาที
                 plot_out = gr.Plot(label="Loss + LR")
                 log_out = gr.Textbox(
                     label="Live Log", lines=16, max_lines=16, interactive=False
@@ -291,15 +308,19 @@ def build_dashboard(controller) -> gr.Blocks:
         timer.tick(
             h["on_tick"], inputs=[verdict_state],
             outputs=[
-                status_md, plot_out, log_out, start_error_md,
+                status_md, plot_out, log_out, banner_md,
                 start_btn, abort_btn, predict_btn, merge_btn,
             ],
         )
+        # M2: predict + merge ใช้ concurrency_id ร่วม — ห้ามสอง process โหลดโมเดลพร้อมกัน
         predict_btn.click(
             h["on_predict"], inputs=cfg_inputs + [prefix_in, suffix_in],
-            outputs=[predict_out, predict_error_md],
+            outputs=[predict_out, predict_error_md], concurrency_id="model_load",
         )
         save_btn.click(h["on_save_adapter"], inputs=[output_in], outputs=[export_msg])
-        merge_btn.click(h["on_merge"], inputs=cfg_inputs, outputs=[export_msg])
+        merge_btn.click(
+            h["on_merge"], inputs=cfg_inputs, outputs=[export_msg],
+            concurrency_id="model_load",
+        )
 
     return demo

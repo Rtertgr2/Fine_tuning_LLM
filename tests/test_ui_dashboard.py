@@ -68,3 +68,24 @@ def test_build_dashboard_locks_exist():
     assert "Abort Process" in labels
     start = next(b for b in buttons if b.value == "Start Fine-Tuning")
     assert start.interactive is False  # ยังไม่ผ่าน preflight → ปิดอยู่
+
+
+def test_collect_config_tolerates_cleared_number_fields():
+    """M7: ช่อง Number ถูกล้าง (None) → ใช้ default จาก safe_defaults ไม่ใช่ crash int(None)"""
+    from configs.safe_defaults import (
+        LORA_RANK_DEFAULT,
+        MAX_SEQ_LENGTH_DEFAULT,
+        MAX_STEPS,
+        TRAIN_CODE_LIMIT,
+    )
+    from ui.dashboard import _collect_config
+
+    config, params = _collect_config(
+        "m/x", None, "ds", "col", "qwen",
+        None, None, None, None, "out",
+    )
+    assert params is None
+    assert config["lora_rank"] == LORA_RANK_DEFAULT
+    assert config["max_seq_length"] == MAX_SEQ_LENGTH_DEFAULT
+    assert config["max_steps"] == MAX_STEPS
+    assert config["code_limit"] == TRAIN_CODE_LIMIT

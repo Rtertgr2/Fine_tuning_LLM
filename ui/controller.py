@@ -6,13 +6,15 @@
 - Message จาก child ทุกใบผ่าน `ipc_bridge.validate_message` ก่อนใช้ — ไม่ผ่าน → เก็บเป็น error
 - Status: state machine `idle → starting → training → saving → finished|aborted`
   หลัง terminal **ห้ามมี status ใหม่มาทับ** (Phase 3 ส่ง `finished` ซ้ำ 2 ครั้ง → dedup โดย ignore)
-- Abort: เรียก `abort_process` (SIGTERM→SIGKILL) แล้วตั้ง `aborted` ทันที — child ถูก kill
-  ไม่ทันส่ง status เอง (กัน watchdog false alarm, ส่งไม้ต่อจาก Phase 3)
+- Abort: ตั้ง `aborted` ก่อน escalate แล้วเรียก `abort_process` (SIGTERM→SIGKILL) **นอก lock**
+  — child ถูก kill ไม่ทันส่ง status เอง (กัน watchdog false alarm, ส่งไม้ต่อจาก Phase 3)
+  และการ escalate นอก lock ทำให้ tick ไม่ถูกบล็อก 10 วินาที
 """
 
 from __future__ import annotations
 
 import multiprocessing as mp
+import pickle
 import threading
 from pathlib import Path
 from queue import Empty
@@ -29,6 +31,10 @@ from core.ipc_bridge import (
     watchdog_error,
 )
 from core.trainer_worker import predict_middle, run_training, validate_config
+
+# `get_nowait()` ของ mp.Queue อาจคาย error อื่นนอกจาก Empty เมื่อ pipe ถูก kill กลางเขียน
+# (truncated pickle → EOFError/OSError/UnpicklingError) — ห้ามให้หลุดออกจาก tick() ไม่งั้น UI ค้างถาวร
+_DRAIN_ERRORS = (EOFError, OSError, pickle.UnpicklingError)
 
 
 class TickSnapshot(NamedTuple):
@@ -93,12 +99,19 @@ class TrainingController:
     # ------------------------------------------------------------------ #
 
     def start(self, config: dict) -> str:
-        """validate → spawn `run_training` — คืน "started" หรือข้อความ error (ไม่ raise)"""
+        """validate → spawn `run_training` — คืน "started" หรือข้อความ error (ไม่ raise)
+
+        มี re-entrancy guard: ระหว่าง training อยู่ห้าม spawn ซ้อน (§5 Process Stacking)
+        และ reset metrics/logs/error ของรอบก่อน — plot ต้องไม่ปนรันเก่า (spec-silent → reasonable expectation)
+        """
         with self._lock:
+            if self.training_active:
+                return "Training is already running — cannot start another run"
             try:
                 validate_config(config)
-            except ValueError as exc:
+            except (ValueError, TypeError) as exc:
                 return str(exc)
+            self._reset_run_state()
             self._process = self._process_factory(
                 target=run_training, args=(config, self._queue)
             )
@@ -107,16 +120,25 @@ class TrainingController:
             return "started"
 
     def abort(self) -> bool:
-        """SIGTERM→SIGKILL แล้วตั้ง aborted ทันที — คืน True ถ้า process ตายสนิท
+        """ตั้ง aborted ทันที → SIGTERM→SIGKILL นอก lock — คืน True ถ้า process ตายสนิท
 
         เรียกตอนยังไม่ start → คืน False (ไม่ raise)
+        ถ้า escalate ล้มเหลว (เดดไลน์ kill ไม่ตาย) → status ถอยกลับ ไม่ปลดล็อกปุ่มทั้งที่ process ยังอยู่
         """
         with self._lock:
             if self._process is None:
                 return False
-            dead = abort_process(self._process)
-            self._status = "aborted"
-            return dead
+            prev = self._status
+            if prev not in TERMINAL_STATUSES:
+                # ตั้ง terminal ก่อน — กัน watchdog false alarm ระหว่าง kill (ส่งไม้ต่อจาก Phase 3)
+                self._status = "aborted"
+            process = self._process
+        dead = abort_process(process)  # นอก lock — tick ไม่ถูกบล็อก 10 วิ (M9)
+        if not dead:
+            with self._lock:
+                if self._status == "aborted" and prev not in TERMINAL_STATUSES:
+                    self._status = prev  # ยังไม่ตายจริง → คง lock ไว้ (M8)
+        return dead
 
     def exit(self) -> None:
         """ปิด app → ฆ่า child (ถ้ามี) กัน orphan/XPU context leak (§5 Orphan Process) — เรียกซ้ำได้"""
@@ -130,7 +152,10 @@ class TrainingController:
     # ------------------------------------------------------------------ #
 
     def tick(self) -> TickSnapshot:
-        """drain queue จนหมดแบบ non-blocking → อัปเดตสถานะ → ตรวจ zombie — คืน snapshot ให้ UI"""
+        """drain queue จนหมดแบบ non-blocking → อัปเดตสถานะ → ตรวจ zombie — คืน snapshot ให้ UI
+
+        ห้าม raise เด็ดขาด — ถ้า queue พัง (pipe โดน kill กลางเขียน) เก็บเป็น error แล้วหยุด drain
+        """
         with self._lock:
             self._drain_queue()
             watchdog = (
@@ -154,14 +179,32 @@ class TrainingController:
     # Internal
     # ------------------------------------------------------------------ #
 
+    def _reset_run_state(self) -> None:
+        """ล้างประวัติรอบก่อน (I4) — plot/log/error ของรันใหม่ต้องเริ่มว่างเปล่า"""
+        self._metrics.clear()
+        self._logs.clear()
+        self._error = None
+        # msg ค้างใน queue จากรอบก่อน (ถ้ามี) ต้องทิ้ง ไม่งั้นถูกนับเป็นของรันใหม่
+        while True:
+            try:
+                self._queue.get_nowait()
+            except Empty:
+                return
+            except _DRAIN_ERRORS:
+                return
+
     def _drain_queue(self) -> None:
         while True:
             try:
                 msg = self._queue.get_nowait()
             except Empty:
                 return
+            except _DRAIN_ERRORS as exc:
+                # pipe พัง = ข้อมูลหาย — เก็บเป็น error แล้วหยุด drain (ห้ามให้ tick raise → UI ค้าง)
+                self._error = f"queue read failed (IPC pipe broken): {exc}"
+                return
             if not validate_message(msg):
-                self._error = f"message ไม่ผ่าน validate: {msg!r}"
+                self._error = f"message failed validation (ignored): {msg!r}"
                 continue
             self._handle_message(msg)
 
@@ -198,7 +241,9 @@ def run_predict(
 ) -> str:
     """Spawn predict_middle ใน process แยก แล้วรอผล — คืนข้อความที่ model generate
 
-    หมด timeout / child ตายเงียบ / child ส่ง error → raise RuntimeError (ไม่ hang — Review Focus 4)
+    - child ตายเงียบ → RuntimeError ทันที (ไม่รอจน timeout — M1)
+    - หมด timeout → RuntimeError
+    - ทุก path ผ่าน finally เก็บ child เสมอ — ห้ามปล่อย orphan (§5 Orphan Process, I3)
     """
     import time
 
@@ -208,17 +253,41 @@ def run_predict(
     )
     process.start()
     deadline = time.monotonic() + timeout
-    while True:
-        try:
-            msg = q.get_nowait()
-        except Empty:
-            if time.monotonic() >= deadline:
-                raise RuntimeError(f"predict timeout หลัง {timeout} วินาที")
-            time.sleep(0.05)
-            continue
-        if not validate_message(msg):
-            continue
-        if msg["type"] == "log":
-            return msg["text"]
-        if msg["type"] == "error":
-            raise RuntimeError(msg["message"])
+    try:
+        while True:
+            msg = None
+            try:
+                msg = q.get_nowait()
+            except Empty:
+                pass
+            except _DRAIN_ERRORS as exc:
+                raise RuntimeError(f"IPC pipe broken during predict: {exc}")
+
+            if msg is None:
+                if not process.is_alive():
+                    # child เพิ่งตาย — รอ pipe flush สั้น ๆ แล้วอ่านครั้งสุดท้าย (msg อาจส่งทัน)
+                    time.sleep(0.15)
+                    try:
+                        msg = q.get_nowait()
+                    except (Empty,) + _DRAIN_ERRORS:
+                        msg = None
+                    if msg is None:
+                        raise RuntimeError(
+                            "Predict process died without sending a result"
+                        )
+                elif time.monotonic() >= deadline:
+                    raise RuntimeError(f"Predict timeout after {timeout}s")
+                else:
+                    time.sleep(0.05)
+                    continue
+
+            if not validate_message(msg):
+                continue
+            if msg["type"] == "log":
+                return msg["text"]
+            if msg["type"] == "error":
+                raise RuntimeError(msg["message"])
+    finally:
+        process.join(1.0)
+        if process.is_alive():
+            abort_process(process)

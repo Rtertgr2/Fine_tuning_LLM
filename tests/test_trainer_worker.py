@@ -269,10 +269,9 @@ def test_latest_checkpoint_none_raises(tmp_path):
 
 def test_build_fim_prompt_exact():
     fim_tokens = {"prefix": "<|fim_prefix|>", "suffix": "<|fim_suffix|>", "middle": "<|fim_middle|>"}
-    prompt = wa.build_fim_prompt("def f():", "return 1", fim_tokens=fim_tokens, eos="</s>")
+    prompt = wa.build_fim_prompt("def f():", "return 1", fim_tokens=fim_tokens)
     # PSM แบบไม่มี middle (model generate ต่อจาก middle_tok เอง) — ไม่มี eos เสริม
     assert prompt == "<|fim_prefix|>def f():<|fim_suffix|>return 1<|fim_middle|>"
-    assert "</s>" not in prompt
 
 
 def test_save_adapter_only_copies(tmp_path):
@@ -295,3 +294,30 @@ def test_save_adapter_only_no_checkpoint_raises(tmp_path):
 
 def test_merge_export_importable():
     assert callable(wa.merge_export)
+
+
+def test_save_adapter_only_config_without_weights_raises(tmp_path):
+    """M5: มีแค่ adapter_config.json (น้ำหนักหาย) → ต้อง raise ไม่ใช่รายงานสำเร็จ"""
+    ckpt = tmp_path / "run" / "checkpoint-5"
+    ckpt.mkdir(parents=True)
+    (ckpt / "adapter_config.json").write_text("{}")
+    with pytest.raises(ValueError):
+        wa.save_adapter_only(tmp_path / "run")
+
+
+def test_save_adapter_only_copies_shards(tmp_path):
+    """M5: sharded weights ต้องถูก copy ครบ (ไม่ใช่แค่ index)"""
+    ckpt = tmp_path / "run" / "checkpoint-7"
+    ckpt.mkdir(parents=True)
+    (ckpt / "adapter_config.json").write_text("{}")
+    (ckpt / "adapter_model-00001-of-00002.safetensors").write_bytes(b"a")
+    (ckpt / "adapter_model-00002-of-00002.safetensors").write_bytes(b"b")
+    (ckpt / "adapter_model.safetensors.index.json").write_text("{}")
+    dest = wa.save_adapter_only(tmp_path / "run", exports_dir=tmp_path / "exports")
+    names = sorted(p.name for p in dest.iterdir())
+    assert names == [
+        "adapter_config.json",
+        "adapter_model-00001-of-00002.safetensors",
+        "adapter_model-00002-of-00002.safetensors",
+        "adapter_model.safetensors.index.json",
+    ]
