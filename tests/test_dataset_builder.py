@@ -110,3 +110,25 @@ def test_heldout_stable_and_ratio():
     ratio = held / len(codes)
     assert 0.05 <= ratio <= 0.15, f"heldout ratio = {ratio}"
     assert HELDOUT_RATIO == 0.10
+
+
+def test_iter_codes_limits_and_column(monkeypatch):
+    calls: dict = {}
+
+    def fake_load_dataset(dataset_id, *, split, streaming, cache_dir):
+        calls["dataset_id"] = dataset_id
+        calls["split"] = split
+        calls["streaming"] = streaming
+        calls["cache_dir"] = cache_dir
+        return ({"content": f"code_{i}", "other": i} for i in range(100))
+
+    monkeypatch.setattr(db, "load_dataset", fake_load_dataset)
+    got = db.iter_codes("fake/ds", "content", limit=5)
+    assert got == [f"code_{i}" for i in range(5)]  # 5 ตัวแรกตามลำดับ
+    # kwargs ที่ส่งไปต้องตรง: streaming + split + cache_dir
+    assert calls == {
+        "dataset_id": "fake/ds",
+        "split": "train",
+        "streaming": True,
+        "cache_dir": "data_cache",
+    }

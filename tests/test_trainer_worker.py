@@ -183,3 +183,35 @@ def test_non_metric_logs_forwarded():
     msg = q.messages[0]
     assert msg["type"] == "log"
     assert ipc.validate_message(msg) is True
+
+
+FULL_CONFIG = {
+    "model_id": "Qwen/Qwen2.5-Coder-0.5B",
+    "dataset_id": "smangrul/hf-stack-v1",
+    "dataset_column": "content",
+    "fim_registry_key": "qwen",
+    "output_dir": "data_cache/phase3_test",
+    "max_seq_length": 1024,
+    "max_steps": 6,
+    "code_limit": 64,
+    "lora_rank": 8,
+}
+
+
+def test_validate_config():
+    wa.validate_config(dict(FULL_CONFIG))  # ครบ → ไม่ raise
+    for key in FULL_CONFIG:
+        broken = dict(FULL_CONFIG)
+        del broken[key]
+        with pytest.raises(ValueError) as exc:
+            wa.validate_config(broken)
+        assert key in str(exc.value)  # ValueError ต้องบอกชื่อ key ที่ขาด
+    # hard cap §5: max_seq_length ต้องอยู่ใน (0, 2048]
+    too_long = dict(FULL_CONFIG)
+    too_long["max_seq_length"] = 4096
+    with pytest.raises(ValueError):
+        wa.validate_config(too_long)
+    zero = dict(FULL_CONFIG)
+    zero["max_seq_length"] = 0
+    with pytest.raises(ValueError):
+        wa.validate_config(zero)

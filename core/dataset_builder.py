@@ -10,7 +10,10 @@ from __future__ import annotations
 import hashlib
 import random
 from collections.abc import Iterable, Iterator
+from itertools import islice
 from typing import Any
+
+from datasets import load_dataset
 
 from configs.safe_defaults import (
     FIM_RATE,
@@ -93,3 +96,16 @@ def is_heldout(code: str, heldout_ratio: float = HELDOUT_RATIO) -> bool:
     """แยก train/held-out ด้วย md5 คงที่ — code เดียวกันตกข้างเดียวกันเสมอ (กัน leakage)"""
     digest = hashlib.md5(code.encode("utf-8")).hexdigest()
     return int(digest, 16) / _HEX_MAX < heldout_ratio
+
+
+def iter_codes(
+    dataset_id: str,
+    column: str,
+    *,
+    limit: int,
+    split: str = "train",
+    cache_dir: str = "data_cache",
+) -> list[str]:
+    """อ่าน `limit` ตัวอย่างแรกจาก dataset แบบ streaming — ชุดเทรนย่อย (smoke, plan.md §4.4)"""
+    ds = load_dataset(dataset_id, split=split, streaming=True, cache_dir=cache_dir)
+    return [row[column] for row in islice(ds, limit)]
