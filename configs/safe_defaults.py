@@ -39,3 +39,23 @@ ESTIMATOR_FALLBACK_NUM_LAYERS: int = 40
 
 # --- Subprocess / IPC ---
 ABORT_SIGTERM_TIMEOUT_S: float = 10.0
+
+# --- Training hyperparameters (plan.md §4.4) — ห้าม hardcode ซ้ำในโค้ดส่วนอื่น ---
+GRADIENT_ACCUMULATION_STEPS: int = 8
+LEARNING_RATE: float = 2e-4
+WARMUP_RATIO: float = 0.03
+SAVE_TOTAL_LIMIT: int = 2
+SAVE_STEPS: int = 100
+MAX_STEPS: int = 500
+NONFINITE_ABORT_THRESHOLD: int = 3
+LORA_RANK_DEFAULT: int = 8
+LORA_TARGET_MODULES: tuple[str, ...] = (
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj",
+)
+TRAIN_CODE_LIMIT: int = 8192
