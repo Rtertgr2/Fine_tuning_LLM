@@ -19,3 +19,9 @@ data_cache/
 # OS
 .DS_Store
 .superpowers/
+
+# เครื่องมือ/แผนส่วนตัว (ใช้ local เท่านั้น — ห้ามขึ้น GitHub)
+plan.md
+opencode.json
+skills-lock.json
+.agents/
