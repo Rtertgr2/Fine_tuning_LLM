@@ -13,6 +13,7 @@ resolve ไม่ได้และไม่กรอก = blocked (ห้าม
 from __future__ import annotations
 
 import json
+import math
 from typing import NamedTuple
 
 from huggingface_hub import hf_hub_download
@@ -94,7 +95,12 @@ def resolve_model_spec(model_id: str, user_params_b: float | None) -> ModelSpec:
         num_params = n * (4 * d * d + 3 * d * inter) + vocab * d
         return ModelSpec(num_params, d, n, "hf_config")
     except Exception:  # เงื่อนไขสเปก "ออฟไลน์ / โหลดไม่ได้" = อะไรก็ตามที่ขวาง
-        if user_params_b is None:
+        # P ที่ใช้ไม่ได้ (ไม่กรอก / 0 / ลบ / NaN / inf) = ยังไม่ทราบที่เชื่อถือได้ → ห้ามเดา
+        if (
+            user_params_b is None
+            or not math.isfinite(user_params_b)
+            or user_params_b <= 0
+        ):
             raise ModelSpecUnavailable(model_id) from None
         return ModelSpec(
             int(user_params_b * 1e9),

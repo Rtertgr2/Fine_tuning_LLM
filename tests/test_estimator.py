@@ -67,6 +67,17 @@ def test_blocked_when_params_unknown(monkeypatch, tmp_path):
     assert "พารามิเตอร์" in result.reason
 
 
+def test_invalid_user_params_blocked(monkeypatch, tmp_path):
+    # P ที่ใช้ไม่ได้ (0/ลบ/NaN/inf) ต้องไม่ได้ "safe" ปลอม และห้าม crash
+    _patch_fetch(monkeypatch, tmp_path, error=OSError("offline"))
+    for bad in (0, -1.5, float("nan"), float("inf")):
+        result = est.estimate(
+            _hw_ready(), model_id="acme/offline-model", user_params_b=bad
+        )
+        assert result.verdict == "blocked", bad
+        assert "พารามิเตอร์" in result.reason
+
+
 def test_user_fallback_params(monkeypatch, tmp_path):
     _patch_fetch(monkeypatch, tmp_path, error=OSError("offline"))
     result = est.estimate(_hw_ready(), model_id="acme/offline-model", user_params_b=1.5)

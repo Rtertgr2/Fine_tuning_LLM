@@ -79,7 +79,9 @@ def test_short_sample_skipped():
 def test_truncation_keeps_eos():
     from transformers import AutoTokenizer
 
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-Coder-0.5B")
+    tokenizer = AutoTokenizer.from_pretrained(
+        "Qwen/Qwen2.5-Coder-0.5B", local_files_only=True
+    )
     long_code = "\n".join(f"value_{i} = compute({i})" for i in range(200)) + "\n"
     outputs = list(
         db.build_samples(
