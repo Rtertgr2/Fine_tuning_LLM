@@ -36,3 +36,6 @@ ESTIMATOR_OVERHEAD_GB: float = 1.0
 # dims สำรองตอนโหลด config ไม่ได้ (upper bound อนุรักษ์นิยมสำหรับ activation)
 ESTIMATOR_FALLBACK_HIDDEN_SIZE: int = 4096
 ESTIMATOR_FALLBACK_NUM_LAYERS: int = 40
+
+# --- Subprocess / IPC ---
+ABORT_SIGTERM_TIMEOUT_S: float = 10.0
