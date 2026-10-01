@@ -1,0 +1,76 @@
+"""XPU runtime sanity check — เกณฑ์ผ่าน Phase 1 (plan.md §6 Phase 1).
+
+รันด้วย: .venv/bin/python scripts/check_runtime.py
+exit 0 = ผ่านทุกข้อ, exit 1 = มีข้อตก (พิมพ์สาเหตุทุกบรรทัด)
+"""
+
+from __future__ import annotations
+
+import sys
+
+import psutil
+import torch
+
+try:  # configs อาจยังไม่ถูกสร้าง (Task 5) — ใช้ค่าชั่วคราวตามสเปก
+    from configs.safe_defaults import DISK_MIN_GB, RAM_MIN_GB
+except ImportError:
+    RAM_MIN_GB = 16  # temp — refactor เป็น import เมื่อ configs พร้อม
+    DISK_MIN_GB = 20
+
+GB = 1024**3
+
+
+def main() -> int:
+    failures: list[str] = []
+
+    # (1) identity ของ runtime
+    print(f"torch           : {torch.__version__}")
+    available = torch.xpu.is_available()
+    print(f"xpu available   : {available}")
+    if not available:
+        print("FAIL: torch.xpu ไม่เห็นอุปกรณ์ (ตรวจ level-zero + intel-compute-runtime)")
+        return 1
+    device_name = torch.xpu.get_device_name(0)
+    print(f"device name     : {device_name}")
+
+    # (2) VRAM
+    free_b, total_b = torch.xpu.mem_get_info(0)
+    print(f"vram total/free : {total_b / GB:.2f} / {free_b / GB:.2f} GB")
+    if total_b <= 0 or free_b < 0:
+        failures.append("VRAM ค่าผิดปกติ")
+
+    # (3) RAM + disk ตาม threshold
+    ram_avail = psutil.virtual_memory().available / GB
+    disk_free = psutil.disk_usage(".").free / GB
+    print(f"ram available   : {ram_avail:.2f} GB (min {RAM_MIN_GB})")
+    print(f"disk free       : {disk_free:.2f} GB (min {DISK_MIN_GB})")
+    if ram_avail < RAM_MIN_GB:
+        failures.append(f"RAM ว่างน้อยกว่า {RAM_MIN_GB} GB")
+    if disk_free < DISK_MIN_GB:
+        failures.append(f"ดิสก์ว่างน้อยกว่า {DISK_MIN_GB} GB")
+
+    # (4) forward/backward จริงบน XPU
+    x = torch.randn(64, 64, device="xpu", requires_grad=True)
+    w = torch.randn(64, 64, device="xpu")
+    target = torch.randn(64, 64, device="xpu")
+    loss = ((x @ w) - target).pow(2).mean()
+    loss.backward()
+    grad = x.grad
+    print(f"fwd/bwd loss    : {loss.item():.4f}")
+    if grad is None or not torch.isfinite(grad).all():
+        failures.append("grad ไม่ finite")
+    elif grad.abs().sum() == 0:
+        failures.append("grad ทั้งหมดเป็นศูนย์")
+    else:
+        print("fwd/bwd grad    : finite + มีค่า != 0 ✓")
+
+    if failures:
+        for f in failures:
+            print(f"FAIL: {f}")
+        return 1
+    print("ALL CHECKS PASSED")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
