@@ -20,6 +20,7 @@
 - `ui/controller.py` **ห้าม import gradio**; `ui/components.py` รับ raw data ห้ามตีความ (data contract §4.6)
 - ล็อก Predict Middle + Merge & Export ตลอดเวลา `controller.training_active` (§5 VRAM Contention)
 - ของเดิม 53 tests ต้องเขียวตลอด
+- **Test-once (user ตัดสินใจ Phase 4):** เขียน tests + implement ครบทุก task (1–7) ก่อน แล้วรัน `pytest` ทีเดียวตอน Task 7 — **ห้ามรันระหว่างทาง**; หลัง run แรกถ้า fail ให้ debug + รันซ้ำได้ตามปกติ
 
 ## Review Focus
 (ข้อ 1–5 = failure modes ที่ spec บอกไว้แต่เผลอหลุดง่าย — task เจ้าของต้องมี test คุม)
@@ -53,15 +54,13 @@
   - `test_status_machine_and_dedup`: drain `starting, training, finished, finished, training` → `status == "finished"` (dedup + terminal ignore), `training_active is False`
   - `test_invalid_msg_becomes_error`: queue มี `{"type": "alien", ...}` → `error` ไม่ None + mention msg, ไม่เข้า metrics/logs, ไม่ raise
 
-- [ ] **Step 2: รัน test — FAIL** — `../../.venv/bin/python -m pytest tests/test_ui_controller.py -v` → ImportError (module ยังไม่มี)
-- [ ] **Step 3: implement** ใน `ui/controller.py`:
+- [ ] **Step 2: implement ใน `ui/controller.py`** (ยังไม่รัน test — test-once):
   - `class TickSnapshot(NamedTuple)` ตาม fields ด้านบน
   - `TrainingController.__init__`: lock = `threading.Lock()`, `self._queue=None`, `self._process=None`, `self._status="idle"`, `self._metrics=[]`, `self._logs=[]`, `self._error=None`
   - `start(config)`: `validate_config(config)` ใน try/except → คืน f"config ขาด key: ..." (ไม่ spawn); else สร้าง queue/process ผ่าน factory (`process_factory(target=run_training, args=(config, q))`), `.start()`, `_status="starting"`, คืน `"started"`
   - `tick()`: ภายใต้ lock — drain `get_nowait` จน `queue.Empty`: `validate_message` ไม่ผ่าน → `_error`; `metric` → append `_metrics`; `log` → `_logs.append(f"[{level}] {text}")`; `error` → `_error = message` + log traceback บรรทัด; `status` → state machine (terminal แล้ว = ignore); คืน `TickSnapshot(_status, list, list, _error, None, training_active)` — **`watchdog` คืน `None` (Task 2 เติม)**
   - `training_active`: `self._process is not None and _status not in TERMINAL_STATUSES`
-- [ ] **Step 4: รัน test — PASS ทั้ง 5**
-- [ ] **Step 5: Commit** — `git add ui/ tests/test_ui_controller.py && git commit -m "feat: TrainingController core (start + tick state machine)"`
+- [ ] **Step 3: Commit** — `git add ui/ tests/test_ui_controller.py && git commit -m "feat: TrainingController core (start + tick state machine)"`
 
 ---
 
@@ -85,10 +84,8 @@
   - `test_abort_kills_and_marks_terminal`: start ด้วย FakeProcess(dies_on_terminate=False) → `abort() is True`; `terminate`+`kill` ถูกเรียก; `tick().watchdog is None`; `training_active is False` — **Review Focus 3**
   - `test_zombie_watchdog_after_drain`: start แล้ว make process dead + status ยัง `"training"` + queue มี `error_msg("boom","tb")` ค้าง → `tick().error` มี "boom" (drain ก่อน) **และ** `.watchdog` ไม่ None — **Review Focus 2**
   - `test_exit_terminates_child`: start แล้ว `exit()` → process `is_alive() is False`; เรียก `exit()` ซ้ำไม่ raise
-- [ ] **Step 2: รัน test — FAIL** (method ยังไม่มี)
-- [ ] **Step 3: implement** — `preflight` (composition สองบรรทัด), `abort` (lock + `abort_process` + ตั้ง terminal + คืน bool), `exit`, และ **เติม watchdog ใน `tick()`**: หลัง drain แล้วเรียก `watchdog_error(self._process, self._status)` คืน msg → ใส่ field `watchdog`
-- [ ] **Step 4: รัน test — PASS ทั้ง 6 (รวมเดิม = 11)**
-- [ ] **Step 5: Commit** — `git commit -m "feat: controller preflight + abort escalation + watchdog"`
+- [ ] **Step 2: implement** — `preflight` (composition สองบรรทัด), `abort` (lock + `abort_process` + ตั้ง terminal + คืน bool), `exit`, และ **เติม watchdog ใน `tick()`**: หลัง drain แล้วเรียก `watchdog_error(self._process, self._status)` คืน msg → ใส่ field `watchdog`
+- [ ] **Step 3: Commit** — `git commit -m "feat: controller preflight + abort escalation + watchdog"`
 
 ---
 
@@ -110,10 +107,8 @@
 - [ ] **Step 1: เขียน tests**:
   - `tests/test_trainer_worker.py`: `test_latest_checkpoint_numeric_order` (tmp: `checkpoint-2`, `checkpoint-100` → คืน `-100`; ไม่มี → `pytest.raises(ValueError)`), `test_build_fim_prompt_exact` (qwen tokens + prefix/suffix → string เป๊ะ ไม่มี middle/eos เสริม)
   - `tests/test_ui_controller.py`: `test_run_predict_success` (fake process + FakeQueue ใส่ `log_msg("INFO","def f(): pass")` → คืน `"def f(): pass"`), `test_run_predict_timeout_raises` (queue ว่าง + timeout=0.05 → `pytest.raises(RuntimeError)`), `test_run_predict_error_raises` (ใส่ `error_msg("no adapter","")` → `RuntimeError` message มี "no adapter")
-- [ ] **Step 2: รัน test — FAIL**
-- [ ] **Step 3: implement** ทั้ง 3 functions (run_predict ใช้ sleep 0.05 loop + deadline; `predict_middle` ตาม flow ใน Interfaces — generation greedy)
-- [ ] **Step 4: รัน test — PASS ทั้ง 5**
-- [ ] **Step 5: Commit** — `git commit -m "feat: FIM predict pipeline (predict_middle + run_predict)"`
+- [ ] **Step 2: implement** ทั้ง 3 functions (run_predict ใช้ sleep 0.05 loop + deadline; `predict_middle` ตาม flow ใน Interfaces — generation greedy)
+- [ ] **Step 3: Commit** — `git commit -m "feat: FIM predict pipeline (predict_middle + run_predict)"`
 
 ---
 
@@ -130,10 +125,8 @@
   - `merge_export(config: dict) -> Path` — spawn target: โหลด base + adapter → `merge_and_unload()` → `save_pretrained(exports/<name>-merged/)`; **ไม่มี unit test** (body = โหลดโมเดลจริง — ตรวจจริงตอน Phase 5 หลังเทรนจบ; task นี้ขอแค่ test ของ `save_adapter_only` + import check ของ `merge_export`)
 
 - [ ] **Step 1: เขียน tests**: `test_save_adapter_only_copies` (tmp output_dir มี `checkpoint-10/adapter_config.json` + `adapter_model.safetensors` → คืน `exports/<name>/` ที่มีไฟล์ครบ), `test_save_adapter_only_no_checkpoint_raises`, `test_merge_export_importable` (`callable(wa.merge_export)`)
-- [ ] **Step 2: รัน test — FAIL**
-- [ ] **Step 3: implement** — `save_adapter_only` ด้วย `shutil.copy2`; `merge_export` ตาม flow ข้างบน (imports PeftModel เพิ่ม)
-- [ ] **Step 4: รัน test — PASS ทั้ง 3**
-- [ ] **Step 5: Commit** — `git commit -m "feat: export workers (adapter copy + merge target)"`
+- [ ] **Step 2: implement** — `save_adapter_only` ด้วย `shutil.copy2`; `merge_export` ตาม flow ข้างบน (imports PeftModel เพิ่ม)
+- [ ] **Step 3: Commit** — `git commit -m "feat: export workers (adapter copy + merge target)"`
 
 ---
 
@@ -151,10 +144,8 @@
   - (Log Viewer = `gr.Textbox` ธรรมดาใน dashboard — ไม่มี function เดี่ยว)
 
 - [ ] **Step 1: เขียน tests**: `test_build_metric_plot_two_axes` (fig.axes == 2; line axes[0] มี x=steps,y=loss ตรง input), `test_build_metric_plot_empty` (ว่าง → ไม่ raise, axes ครบ), `test_verdict_style_colors` (safe→`#16a34a`, warning→`#ca8a04`, `"blocked"`/`"no_xpu"`→`#dc2626`; label คงเป็น verdict เดิม) — ใช้ `matplotlib.use("Agg")` ใน test
-- [ ] **Step 2: รัน test — FAIL**
-- [ ] **Step 3: implement** (`matplotlib.pyplot` — สร้าง fig แล้ว `plt.close` ไม่ต้องใน component ปล่อย Gradio จัดการ)
-- [ ] **Step 4: รัน test — PASS ทั้ง 3**
-- [ ] **Step 5: Commit** — `git commit -m "feat: ui/components metric plot + verdict style"`
+- [ ] **Step 2: implement** (`matplotlib.pyplot` — สร้าง fig แล้ว `plt.close` ไม่ต้องใน component ปล่อย Gradio จัดการ)
+- [ ] **Step 3: Commit** — `git commit -m "feat: ui/components metric plot + verdict style"`
 
 ---
 
@@ -169,14 +160,12 @@
 - Produces (Task 7 ใช้): `build_dashboard(controller: TrainingController) -> gr.Blocks`
 
 - [ ] **Step 1: เขียน tests**: `test_build_dashboard_structure` — `demo = build_dashboard(FakeController())` → `isinstance(demo, gr.Blocks)`; ป้าย tab ทั้ง 3 = `["Configuration & Pre-flight", "Training Mission Control", "Playground & Export"]`; มี `gr.Timer` อย่างน้อย 1 ตัว; slider `max_seq_length` มี `maximum == MAX_SEQ_LENGTH_CAP` และ `value == MAX_SEQ_LENGTH_DEFAULT`
-- [ ] **Step 2: รัน test — FAIL**
-- [ ] **Step 3: implement** — `build_dashboard(controller)`:
+- [ ] **Step 2: implement** — `build_dashboard(controller)`:
   - **Tab 1**: widgets 9 ฟิลด์ + `Parameters (B)` (ค่า default จาก safe_defaults ทั้งหมด: model `DEFAULT_MODEL_ID`, dataset `DEFAULT_DATASET_ID`, column `DEFAULT_DATASET_COLUMN`, fim key `"qwen"`, lora rank `LORA_RANK_DEFAULT` slider choices [8,16,32], max_seq slider cap `MAX_SEQ_LENGTH_CAP`, max_steps `MAX_STEPS`, code_limit `TRAIN_CODE_LIMIT`, output_dir `"data_cache/finetune_run"`) + ปุ่ม `Run Environment Check` → `controller.preflight(...)` → gauge (`verdict_style`) + reason + ตาราง breakdown + **บันทึก verdict ใน `gr.State`**; Start ถูก disable เมื่อ verdict ไม่ใช่ `safe`/`warning`
   - **Tab 2**: `Start Fine-Tuning` (gather config → `validate` ผ่าน `start()` → ข้อความแดงใต้ปุ่มถ้า error), `Abort Process`, status badge, `gr.Plot`, live log textbox; `gr.Timer(1.0)` → `tick()` → อัปเดต plot (จาก `snapshot.metrics`), log, badge, error banner, interactivity ปุ่มทุกปุ่ม (locks ตาม `training_active`)
   - **Tab 3**: Prefix/Suffix `gr.Code`, `Predict Middle` (เรียก `run_predict` sync — บล็อกได้เพราะ predict ถูกล็อกไม่ให้วิ่งพร้อม training), `Save Adapter Only` (`save_adapter_only` → ข้อความ path), `Merge & Export` (เรียก `merge_export` sync + `gr.Button loading`); **Predict/Merge `interactive=not training_active`** ทุก tick
   - ฟังก์ชัน helper ในไฟล์เดียวกัน: `_collect_config(...) -> tuple[dict, float | None]` (9 keys + user_params_b)
-- [ ] **Step 4: รัน test — PASS**
-- [ ] **Step 5: Commit** — `git commit -m "feat: ui/dashboard 3 tabs + controller wiring"`
+- [ ] **Step 4: Commit** — `git commit -m "feat: ui/dashboard 3 tabs + controller wiring"`
 
 ---
 
@@ -191,11 +180,9 @@
 - Produces: `main() -> None`
 
 - [ ] **Step 1: เขียน test**: `test_app_import_does_not_launch` — `import app` (ใน subprocess หรือโดยตรง) แล้ว `callable(app.main)` — **ห้าม** เปิด server ตอน import
-- [ ] **Step 2: รัน test — FAIL** (app.py ยังไม่มี)
-- [ ] **Step 3: implement `app.py`**: `main()` = `mp.set_start_method("spawn", force=True)` → `TrainingController()` → `demo = build_dashboard(c)` → `atexit.register(c.exit)` + `signal.SIGTERM/SIGINT` handler → `c.exit()` → `demo.queue(default_concurrency_limit=1)` → `demo.launch(server_name="127.0.0.1", server_port=7860, prevent_thread_lock=False)`; `if __name__ == "__main__": main()`
-- [ ] **Step 4: รัน unit test — PASS**
-- [ ] **Step 5: Integration จริง (รันได้)**:
+- [ ] **Step 2: implement `app.py`**: `main()` = `mp.set_start_method("spawn", force=True)` → `TrainingController()` → `demo = build_dashboard(c)` → `atexit.register(c.exit)` + `signal.SIGTERM/SIGINT` handler → `c.exit()` → `demo.queue(default_concurrency_limit=1)` → `demo.launch(server_name="127.0.0.1", server_port=7860, prevent_thread_lock=False)`; `if __name__ == "__main__": main()`
+- [ ] **Step 3: Integration จริง (รัน app ได้ ไม่ใช่ pytest)**:
   - `timeout 25 ../../.venv/bin/python app.py &` แล้ว `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:7860` → `200` → kill
   - Manual checklist (report ผล): เปิด UI ได้ / Run Environment Check โชว์ gauge+reason / Start training 6 steps จาก UI เห็น plot เดิน + log / Abort กลางทาง → badge Aborted + VRAM คืน / Predict+Merge ถูกล็อกขณะเทรน / ปิด app กลางเทรน → ไม่มี orphan (`pgrep -af trainer_worker` ว่าง)
-- [ ] **Step 6: Full suite** — `../../.venv/bin/python -m pytest tests/ -v` → 53 เดิม + ~19 ใหม่ = **72** ทั้งหมดเขียว
-- [ ] **Step 7: Commit** — `git add app.py tests/ && git commit -m "feat: app.py entry + integration verification"`
+- [ ] **Step 4: Full suite — จุดรัน pytest ทีเดียวของทั้ง phase (test-once):** `../../.venv/bin/python -m pytest tests/ -v` → 53 เดิม + ~19 ใหม่ = **72** ทั้งหมดเขียว — fail ตรงไหน debug + รันซ้ำได้ตามปกติจนกว่าจะเขียวหมด
+- [ ] **Step 5: Commit** — `git add app.py tests/ && git commit -m "feat: app.py entry + integration verification"`
