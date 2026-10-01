@@ -181,3 +181,101 @@ def test_tick_without_start_is_safe():
     assert snap.status == "idle"
     assert snap.training_active is False
     assert snap.error is None and snap.watchdog is None
+
+
+# ---------------------------------------------------------------------------
+# Task 2: preflight + abort + watchdog + exit
+# ---------------------------------------------------------------------------
+
+
+def _fake_ready_hw(**overrides) -> dict:
+    hw = {
+        "status": "ready",
+        "device_name": "Intel(R) Arc(TM) GPU",
+        "total_vram_gb": 32.0,
+        "free_vram_gb": 30.0,
+        "ram_available_gb": 64.0,
+        "disk_free_gb": 500.0,
+    }
+    hw.update(overrides)
+    return hw
+
+
+def test_preflight_passthrough_blocked(monkeypatch):
+    """hardware ไม่พร้อม → passthrough ทันที (Review Focus 5: dashboard ใช้ปิด Start)"""
+    from ui import controller as controller_mod
+
+    monkeypatch.setattr(
+        controller_mod.hardware,
+        "inspect",
+        lambda output_dir=".": {
+            "status": "insufficient_disk",
+            "free_vram_gb": 5.0,
+        },
+    )
+    ctl, _fp, _state = make_controller()
+    result = ctl.preflight(valid_config())
+    assert result.verdict == "insufficient_disk"
+    assert result.reason  # มีเหตุผลให้แสดง
+
+
+def test_preflight_safe_estimate(monkeypatch):
+    from ui import controller as controller_mod
+
+    monkeypatch.setattr(
+        controller_mod.hardware,
+        "inspect",
+        lambda output_dir=".": _fake_ready_hw(),
+    )
+    ctl, _fp, _state = make_controller()
+    result = ctl.preflight(valid_config(), user_params_b=None)
+    assert result.verdict in ("safe", "warning")
+    assert result.total_required_gb > 0
+
+
+def test_abort_without_process_returns_false():
+    """Review Focus 3: abort ก่อน start → False ไม่ raise"""
+    ctl, _fp, _state = make_controller()
+    assert ctl.abort() is False
+
+
+def test_abort_kills_and_marks_terminal():
+    """Review Focus 3: abort ซ้ำ/หลัง abort → terminal ทันที, training_active False"""
+    fp = FakeProcess(alive=True, dies_on_terminate=False)
+    ctl, _fp, _state = make_controller(process=fp)
+    assert ctl.start(valid_config()) == "started"
+    assert ctl.abort() is True
+    assert fp.terminate_calls == 1
+    assert fp.kill_calls == 1
+    assert fp.is_alive() is False
+    assert ctl.training_active is False
+    # zombie alarm ต้องไม่ขึ้นหลัง abort (last_status terminal แล้ว)
+    assert ctl.tick().watchdog is None
+    # abort อีกรอบ (process เดิมตายแล้ว) ไม่ raise
+    assert ctl.abort() is True
+
+
+def test_zombie_watchdog_after_drain():
+    """Review Focus 2: process ตายแต่ queue มี error ค้าง → error ถูกส่งก่อน + watchdog ขึ้น"""
+    fp = FakeProcess(alive=False)  # ตายแล้วตั้งแต่ก่อน start tick
+    ctl, _fp, _state = make_controller(
+        messages=[status_msg("training"), error_msg("boom", "tb-line")],
+        process=fp,
+    )
+    ctl.start(valid_config())
+    # start() สร้าง status="starting"; drain จะอัปเดตเป็น training แล้วเจอ error
+    snap = ctl.tick()
+    assert snap.error == "boom"  # drain ก่อนตัดสิน
+    assert "tb-line" in snap.logs
+    assert snap.watchdog is not None
+    assert "zombie" in snap.watchdog
+
+
+def test_exit_terminates_child():
+    fp = FakeProcess(alive=True, dies_on_terminate=False)
+    ctl, _fp, _state = make_controller(process=fp)
+    ctl.start(valid_config())
+    assert fp.is_alive() is True
+    ctl.exit()
+    assert fp.is_alive() is False
+    ctl.exit()  # เรียกซ้ำไม่ raise
