@@ -1,0 +1,18 @@
+# Base Deep Learning Core
+# NOTE: torch ไม่อยู่ในไฟล์นี้ — ติดตั้งแยกผ่าน XPU index (ดูคำเตือนด้านล่าง)
+transformers>=4.44.0
+peft>=0.12.0
+trl>=0.12.0            # สำคัญ: API รุ่นใหม่ใช้ processing_class= — ห้ามต่ำกว่า 0.12 (tokenizer= ถูกแทนที่แล้ว)
+datasets>=2.20.0
+accelerate>=0.33.0
+
+# UI & Monitoring
+gradio>=4.40.0
+psutil>=5.9.0
+
+# Numerical & Data Processing
+numpy>=2.0.0           # เดิมเขียน <2.0.0 ใช้กับ Python 3.12+ ไม่ได้ — ทดสอบจริงใน Compat Spike แล้วค่อยล็อกค่า
+pandas>=2.2.0
+
+# Testing
+pytest>=8.0.0
