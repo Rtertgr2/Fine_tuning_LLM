@@ -27,7 +27,7 @@ from core.ipc_bridge import (
     validate_message,
     watchdog_error,
 )
-from core.trainer_worker import run_training, validate_config
+from core.trainer_worker import predict_middle, run_training, validate_config
 
 
 class TickSnapshot(NamedTuple):
@@ -180,3 +180,40 @@ class TrainingController:
 
     def _append_log(self, level: str, text: str) -> None:
         self._logs.append(f"[{level}] {text}")
+
+
+def run_predict(
+    config: dict,
+    prefix: str,
+    suffix: str,
+    *,
+    timeout: float = 180.0,
+    process_factory=mp.Process,
+    queue_factory=mp.Queue,
+) -> str:
+    """Spawn predict_middle ใน process แยก แล้วรอผล — คืนข้อความที่ model generate
+
+    หมด timeout / child ตายเงียบ / child ส่ง error → raise RuntimeError (ไม่ hang — Review Focus 4)
+    """
+    import time
+
+    q = queue_factory()
+    process = process_factory(
+        target=predict_middle, args=(config, prefix, suffix, q)
+    )
+    process.start()
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            msg = q.get_nowait()
+        except Empty:
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"predict timeout หลัง {timeout} วินาที")
+            time.sleep(0.05)
+            continue
+        if not validate_message(msg):
+            continue
+        if msg["type"] == "log":
+            return msg["text"]
+        if msg["type"] == "error":
+            raise RuntimeError(msg["message"])

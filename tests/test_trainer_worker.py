@@ -243,3 +243,55 @@ def test_on_save_suppressed_after_abort():
     # aborted แล้วห้าม status ถอยหลัง — ไม่งั้นค่าสุดท้ายไม่ใช่ terminal
     # → watchdog คาย "zombie" false alarm ใน Phase 4
     assert len(q.messages) == n
+
+
+# ---------------------------------------------------------------------------
+# Task 3: predict pipeline helpers (latest_checkpoint + build_fim_prompt)
+# ---------------------------------------------------------------------------
+
+
+def test_latest_checkpoint_numeric_order(tmp_path):
+    (tmp_path / "checkpoint-2").mkdir()
+    (tmp_path / "checkpoint-100").mkdir()
+    (tmp_path / "checkpoint-abc").mkdir()  # ไม่ใช่ checkpoint จริง — ต้องเพิกเฉย
+    (tmp_path / "logs").mkdir()
+    result = wa.latest_checkpoint(tmp_path)
+    assert result == tmp_path / "checkpoint-100"  # numeric ไม่ใช่ lexical ("checkpoint-2" > "checkpoint-100" ถ้าผิด)
+
+
+def test_latest_checkpoint_none_raises(tmp_path):
+    with pytest.raises(ValueError):
+        wa.latest_checkpoint(tmp_path)
+    (tmp_path / "checkpoint-abc").mkdir()
+    with pytest.raises(ValueError):
+        wa.latest_checkpoint(tmp_path)  # มีแต่ชื่อปลอม → ยัง raise
+
+
+def test_build_fim_prompt_exact():
+    fim_tokens = {"prefix": "<|fim_prefix|>", "suffix": "<|fim_suffix|>", "middle": "<|fim_middle|>"}
+    prompt = wa.build_fim_prompt("def f():", "return 1", fim_tokens=fim_tokens, eos="</s>")
+    # PSM แบบไม่มี middle (model generate ต่อจาก middle_tok เอง) — ไม่มี eos เสริม
+    assert prompt == "<|fim_prefix|>def f():<|fim_suffix|>return 1<|fim_middle|>"
+    assert "</s>" not in prompt
+
+
+def test_save_adapter_only_copies(tmp_path):
+    out = tmp_path / "run1"
+    ckpt = out / "checkpoint-10"
+    ckpt.mkdir(parents=True)
+    (ckpt / "adapter_config.json").write_text("{}")
+    (ckpt / "adapter_model.safetensors").write_bytes(b"fake")
+    exports = tmp_path / "exports"
+    dest = wa.save_adapter_only(out, exports_dir=exports)
+    assert dest == exports / "run1"
+    assert (dest / "adapter_config.json").exists()
+    assert (dest / "adapter_model.safetensors").read_bytes() == b"fake"
+
+
+def test_save_adapter_only_no_checkpoint_raises(tmp_path):
+    with pytest.raises(ValueError):
+        wa.save_adapter_only(tmp_path / "empty_missing")
+
+
+def test_merge_export_importable():
+    assert callable(wa.merge_export)

@@ -7,7 +7,10 @@ from __future__ import annotations
 
 import queue as stdlib_queue
 
+import pytest
+
 from core.ipc_bridge import error_msg, log_msg, metric_msg, status_msg
+from ui import controller as ui_controller
 from ui.controller import TrainingController
 
 
@@ -279,3 +282,49 @@ def test_exit_terminates_child():
     ctl.exit()
     assert fp.is_alive() is False
     ctl.exit()  # เรียกซ้ำไม่ raise
+
+
+# ---------------------------------------------------------------------------
+# Task 3: run_predict (spawn + drain + timeout — Review Focus 4)
+# ---------------------------------------------------------------------------
+
+
+def _predict_factory(queue_msgs, *, alive=True):
+    """คืน (process_factory, fake_predict_queue) สำหรับ run_predict"""
+    fq = FakeQueue(queue_msgs)
+
+    def process_factory(target, args):
+        fp = FakeProcess(alive=alive)
+        fp.target = target
+        fp.args = args
+        return fp
+
+    return process_factory, fq
+
+
+def test_run_predict_success_returns_text():
+    factory, fq = _predict_factory([log_msg("INFO", "def f(): pass")])
+    result = ui_controller.run_predict(
+        valid_config(), "def f():", "return 1",
+        timeout=1.0, process_factory=factory, queue_factory=lambda: fq,
+    )
+    assert result == "def f(): pass"
+
+
+def test_run_predict_timeout_raises():
+    """Review Focus 4: queue ว่าง + process ตาย → RuntimeError ไม่ใช่ hang"""
+    factory, fq = _predict_factory([], alive=False)
+    with pytest.raises(RuntimeError, match="timeout"):
+        ui_controller.run_predict(
+            valid_config(), "a", "b",
+            timeout=0.1, process_factory=factory, queue_factory=lambda: fq,
+        )
+
+
+def test_run_predict_error_raises():
+    factory, fq = _predict_factory([error_msg("no adapter", "")])
+    with pytest.raises(RuntimeError, match="no adapter"):
+        ui_controller.run_predict(
+            valid_config(), "a", "b",
+            timeout=1.0, process_factory=factory, queue_factory=lambda: fq,
+        )

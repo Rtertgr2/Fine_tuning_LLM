@@ -312,3 +312,131 @@ def run_training(config: dict, queue_) -> None:
         queue_.put(error_msg(str(exc), traceback.format_exc()))
         queue_.put(status_msg("aborted"))
         raise
+
+
+# --------------------------------------------------------------------------- #
+# Phase 4: Playground + Export workers (spawn targets ใน process แยก — §5 VRAM)
+# --------------------------------------------------------------------------- #
+
+
+def latest_checkpoint(output_dir: str | Path) -> Path:
+    """หา `checkpoint-<n>` ที่เลขมากสุดใน output_dir (numeric เทียบ ไม่ใช่ lexical)
+
+    ไม่มี checkpoint ที่ถูกต้อง → raise ValueError (ผู้เรียกตัดสินใจเอง)
+    """
+    root = Path(output_dir)
+    best: tuple[int, Path] | None = None
+    if root.is_dir():
+        for child in root.iterdir():
+            if not (child.is_dir() and is_checkpoint_dir(child.name)):
+                continue
+            step_text = child.name.removeprefix("checkpoint-")
+            if not step_text.isdigit():
+                continue
+            step = int(step_text)
+            if best is None or step > best[0]:
+                best = (step, child)
+    if best is None:
+        raise ValueError(f"ไม่พบ checkpoint ใน {root}")
+    return best[1]
+
+
+def build_fim_prompt(
+    prefix: str, suffix: str, *, fim_tokens: dict, eos: str
+) -> str:
+    """PSM prompt (ไม่มี middle) — model generate ต่อจาก middle_tok เอง"""
+    return (
+        f"{fim_tokens['prefix']}{prefix}"
+        f"{fim_tokens['suffix']}{suffix}"
+        f"{fim_tokens['middle']}"
+    )
+
+
+def predict_middle(config: dict, prefix: str, suffix: str, queue_) -> None:
+    """Playground inference: โหลด base + LoRA จาก checkpoint ล่าสุด → FIM predict middle
+
+    spawn target (process แยก) — ส่งผลลัพธ์เป็น log_msg ลง queue_, ผิด → error_msg + raise
+    """
+    try:
+        validate_config(config)
+        registry_path = Path(__file__).resolve().parents[1] / "configs" / "fim_registry.json"
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        fim_tokens = registry[config["fim_registry_key"]]
+
+        tokenizer = AutoTokenizer.from_pretrained(config["model_id"])
+        ensure_fim_tokens(tokenizer, fim_tokens.values())
+
+        from peft import PeftModel
+
+        adapter_dir = latest_checkpoint(config["output_dir"])
+        model = AutoModelForCausalLM.from_pretrained(
+            config["model_id"],
+            dtype=torch.bfloat16,
+            attn_implementation="sdpa",
+        )
+        model = PeftModel.from_pretrained(model, str(adapter_dir))
+        model.eval()
+
+        prompt = build_fim_prompt(
+            prefix, suffix, fim_tokens=fim_tokens, eos=tokenizer.eos_token or ""
+        )
+        inputs = tokenizer(prompt, return_tensors="pt")
+        device = "xpu" if torch.xpu.is_available() else "cpu"
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+        with torch.no_grad():
+            output_ids = model.generate(
+                **inputs, max_new_tokens=256, do_sample=False
+            )
+        continuation = output_ids[0][inputs["input_ids"].shape[1] :]
+        text = tokenizer.decode(continuation, skip_special_tokens=True)
+        queue_.put(log_msg("INFO", text))
+    except Exception as exc:
+        queue_.put(error_msg(str(exc), traceback.format_exc()))
+        raise
+
+
+def save_adapter_only(
+    output_dir: str | Path, *, exports_dir: str | Path = "exports"
+) -> Path:
+    """คัดลอกเฉพาะไฟล์ LoRA จาก checkpoint ล่าสุด → exports/<output_dir.name>/ (file op ไม่กิน VRAM)"""
+    ckpt = latest_checkpoint(output_dir)
+    dest = Path(exports_dir) / Path(output_dir).name
+    dest.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    for name in ("adapter_config.json", "adapter_model.safetensors"):
+        src = ckpt / name
+        if src.exists():
+            shutil.copy2(src, dest / name)
+            copied += 1
+    for extra in ckpt.glob("adapter_model*.safetensors.index.json"):
+        shutil.copy2(extra, dest / extra.name)
+        copied += 1
+    if copied == 0:
+        raise ValueError(f"checkpoint {ckpt} ไม่มีไฟล์ adapter")
+    return dest
+
+
+def merge_export(config: dict) -> Path:
+    """Merge LoRA เข้า base แล้วบันทึก full weights → exports/<name>-merged/ (spawn target, กิน RAM ~2×)"""
+    validate_config(config)
+    registry_path = Path(__file__).resolve().parents[1] / "configs" / "fim_registry.json"
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    fim_tokens = registry[config["fim_registry_key"]]
+
+    tokenizer = AutoTokenizer.from_pretrained(config["model_id"])
+    ensure_fim_tokens(tokenizer, fim_tokens.values())
+
+    from peft import PeftModel
+
+    adapter_dir = latest_checkpoint(config["output_dir"])
+    model = AutoModelForCausalLM.from_pretrained(
+        config["model_id"], dtype=torch.bfloat16, attn_implementation="sdpa"
+    )
+    model = PeftModel.from_pretrained(model, str(adapter_dir))
+    merged = model.merge_and_unload()
+
+    dest = Path("exports") / f"{Path(config['output_dir']).name}-merged"
+    dest.mkdir(parents=True, exist_ok=True)
+    merged.save_pretrained(dest)
+    tokenizer.save_pretrained(dest)
+    return dest
