@@ -9,7 +9,13 @@
 
 from __future__ import annotations
 
-from trl import SFTConfig
+import math
+import os
+import shutil
+from collections.abc import Iterable
+from pathlib import Path
+
+from trl import SFTConfig, SFTTrainer
 
 from configs.safe_defaults import (
     DEFAULT_BATCH_SIZE,
@@ -17,6 +23,7 @@ from configs.safe_defaults import (
     LEARNING_RATE,
     MAX_SEQ_LENGTH_DEFAULT,
     MAX_STEPS,
+    NONFINITE_ABORT_THRESHOLD,
     SAVE_STEPS,
     SAVE_TOTAL_LIMIT,
     SEED,
@@ -55,3 +62,79 @@ def build_training_args(
         dataset_text_field="text",
         packing=True,
     )
+
+
+class NanGuard:
+    """นับ loss non-finite ติดต่อกัน — ครบ threshold → คืน True (Task 4 สั่ง abort, สเปก §4.4: 3 ครั้งติด)"""
+
+    def __init__(self, threshold: int = NONFINITE_ABORT_THRESHOLD):
+        self.threshold = threshold
+        self._streak = 0
+
+    def register(self, loss: float) -> bool:
+        if math.isfinite(loss):
+            self._streak = 0
+            return False
+        self._streak += 1
+        return self._streak >= self.threshold
+
+
+def ensure_fim_tokens(tokenizer, fim_tokens: Iterable[str]) -> dict[str, int]:
+    """ตรวจว่า FIM tokens อยู่ใน vocab จริง — ขาด/ผิด → ValueError พร้อมชื่อ token
+
+    ผ่านเมื่อ: id ไม่ None, id < len(tokenizer), ไม่ใช่ unk, convert_ids_to_tokens roundtrip ตรง
+    ห้ามเรียก method resize ใด ๆ — แก้ที่ token ก่อนเทรน ไม่ใช่ขยาย embedding ระหว่างทาง
+    """
+    ids: dict[str, int] = {}
+    problems: list[str] = []
+    unk = getattr(tokenizer, "unk_token_id", None)
+    for tok in fim_tokens:
+        tid = tokenizer.convert_tokens_to_ids(tok)
+        if tid is None or tid >= len(tokenizer):
+            problems.append(f"{tok} (id={tid} — อยู่นอก vocab)")
+            continue
+        if unk is not None and tid == unk:
+            problems.append(f"{tok} (คืนค่า unk_token_id — ไม่ได้อยู่ใน vocab)")
+            continue
+        if tokenizer.convert_ids_to_tokens(tid) != tok:
+            problems.append(f"{tok} (roundtrip ไม่ตรง — ถูก split หรือ mapping ผิด)")
+            continue
+        ids[tok] = int(tid)
+    if problems:
+        raise ValueError(
+            "FIM token ขาด/ผิด: " + ", ".join(problems) + " — ต้องแก้ token ก่อนเริ่มเทรน"
+        )
+    return ids
+
+
+def commit_checkpoint(tmp_dir: Path, final_dir: Path) -> None:
+    """ย้าย checkpoint จากโฟลเดอร์ชั่วคราว → ที่อยู่จริงแบบ atomic — ไฟล์ไม่มีวันเสียกลางทาง
+
+    ถ้า final มีของเดิมอยู่ → เก็บออกไปเป็น *.old ก่อน แล้ว rename เข้าที่ แล้วล้าง *.old
+    (ถ้าโดน abort กลาง save → เหลือแค่ *.saving รอบถัดไปไม่แตะ checkpoint จริง)
+    """
+    tmp = Path(tmp_dir)
+    final = Path(final_dir)
+    trash = final.with_name(final.name + ".old")
+    if final.exists():
+        if trash.exists():
+            shutil.rmtree(trash)
+        os.rename(final, trash)
+    os.rename(tmp, final)
+    if trash.exists():
+        shutil.rmtree(trash)
+
+
+class AtomicSaveTrainer(SFTTrainer):
+    """SFTTrainer ที่เขียน checkpoint ลงโฟลเดอร์ `.saving` ก่อนค่อย rename เข้าที่ (สเปก §4.4)
+
+    ไม่มี unit test แยก — ถูก exercise โดย commit_checkpoint test + integration run
+    """
+
+    def _save(self, output_dir: str | None = None, state_dict=None) -> None:
+        if output_dir is None:
+            super()._save(output_dir, state_dict)
+            return
+        tmp = f"{output_dir}.saving"
+        super()._save(tmp, state_dict)
+        commit_checkpoint(Path(tmp), Path(output_dir))
