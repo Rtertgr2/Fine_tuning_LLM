@@ -16,6 +16,7 @@ FIM_RATE: float = 0.5
 MAX_SEQ_LENGTH_DEFAULT: int = 1024
 MAX_SEQ_LENGTH_CAP: int = 2048
 SEED: int = 42
+MIN_SAMPLE_LINES: int = 3
 
 # --- Model / Dataset defaults ---
 DEFAULT_MODEL_ID: str = "Qwen/Qwen2.5-Coder-0.5B"
