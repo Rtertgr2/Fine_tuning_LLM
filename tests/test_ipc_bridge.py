@@ -63,6 +63,16 @@ def test_validate_message_rejects_bad():
     assert ipc.validate_message({"payload": 1}) is False  # ไม่มี type
     assert ipc.validate_message({"type": "metric", "step": 1}) is False  # payload key หาย
     assert ipc.validate_message({"type": "alien"}) is False  # type ไม่รู้จัก
+    # ชนิดผิด → ไม่ผ่าน (สเปก: payload keys ครบ/ชนิดถูก)
+    assert (
+        ipc.validate_message(
+            {"type": "metric", "step": "abc", "loss": 1.0, "lr": 0.1, "epoch": 0.0}
+        )
+        is False
+    )
+    assert ipc.validate_message({"type": "status", "state": "done"}) is False
+    assert ipc.validate_message({"type": "log", "level": 1, "text": "x"}) is False
+    assert ipc.validate_message({"type": "error", "message": "e", "traceback": 5}) is False
 
 
 def test_watchdog_detects_zombie():
@@ -95,7 +105,8 @@ def test_abort_escalates_to_kill():
 
 def test_abort_no_kill_when_terminate_works():
     p = FakeProcess(dies_on_terminate=True)  # SIGTERM ก็ตายแล้ว
-    dead = ipc.abort_process(p, timeout=10.0)
+    dead = ipc.abort_process(p)  # ไม่ส่ง timeout → default จาก safe_defaults
     assert p.terminate_calls == 1
+    assert p.join_timeouts[0] == 10.0  # pin ABORT_SIGTERM_TIMEOUT_S
     assert p.kill_calls == 0  # ตายแล้วห้าม kill ซ้ำ
     assert dead is True

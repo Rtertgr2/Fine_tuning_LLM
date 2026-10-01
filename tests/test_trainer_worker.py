@@ -25,6 +25,9 @@ def test_args_pin_hyperparams():
     assert args.max_length <= 2048  # hard cap §5 — context length ห้ามเกิน 2048
     assert args.packing is True
     assert args.dataset_text_field == "text"
+    assert args.save_strategy == "steps"
+    assert args.logging_steps == 1
+    assert args.report_to == []
 
 
 def test_args_overrides_for_smoke():
@@ -32,6 +35,10 @@ def test_args_overrides_for_smoke():
     assert args.max_steps == 6
     assert args.save_steps == 2
     assert args.warmup_steps == 0  # round(0.03 × 6) = 0
+    # max_seq_length จาก config ต้องถึง SFTConfig.max_length (packing ใช้ค่านี้;
+    # ถ้าไม่ส่ง → hardcode 1024 → UI ตั้ง 2048 ใน Phase 4 ถูกเพิกเฉย)
+    assert wa.build_training_args("out", max_seq_length=2048).max_length == 2048
+    assert wa.build_training_args("out").max_length == 1024  # default = MAX_SEQ_LENGTH_DEFAULT
 
 
 class FakeTokenizer:
@@ -215,3 +222,24 @@ def test_validate_config():
     zero["max_seq_length"] = 0
     with pytest.raises(ValueError):
         wa.validate_config(zero)
+
+
+def test_is_checkpoint_dir_only_matching_names():
+    # atomic path เฉพาะ checkpoint-\d+ เท่านั้น — ถ้าชื่ออื่นผ่าน (เช่น run root ที่มี
+    # checkpoint ซ้อนอยู่) commit_checkpoint จะ rename+rmtree ทิ้ง checkpoint ทั้งหมด
+    assert wa.is_checkpoint_dir("data_cache/run/checkpoint-100") is True
+    assert wa.is_checkpoint_dir("checkpoint-1") is True
+    assert wa.is_checkpoint_dir("checkpoint-abc") is False
+    assert wa.is_checkpoint_dir("checkpoint-100.saving") is False
+    assert wa.is_checkpoint_dir("data_cache/phase3_full") is False
+
+
+def test_on_save_suppressed_after_abort():
+    q, cb, state, control = _cb_with_states()
+    for _ in range(3):
+        cb.on_log(None, state, control, {"loss": float("nan"), "step": 10})
+    n = len(q.messages)
+    cb.on_save(None, state, control)
+    # aborted แล้วห้าม status ถอยหลัง — ไม่งั้นค่าสุดท้ายไม่ใช่ terminal
+    # → watchdog คาย "zombie" false alarm ใน Phase 4
+    assert len(q.messages) == n

@@ -49,13 +49,22 @@ def error_msg(message: str, traceback_text: str) -> dict:
 
 
 def validate_message(msg: object) -> bool:
-    """ตรวจว่า msg เป็นหนึ่งใน 4 type ที่รู้จักและ payload keys ครบ"""
+    """ตรวจว่า msg เป็นหนึ่งใน 4 type ที่รู้จัก, payload keys ครบ และชนิดถูก"""
     if not isinstance(msg, dict):
         return False
-    required = _REQUIRED_KEYS.get(msg.get("type"))
-    if required is None:
+    msg_type = msg.get("type")
+    required = _REQUIRED_KEYS.get(msg_type)
+    if required is None or not all(key in msg for key in required):
         return False
-    return all(key in msg for key in required)
+    if msg_type == "metric":
+        return all(
+            isinstance(msg[key], (int, float)) for key in ("step", "loss", "lr", "epoch")
+        )
+    if msg_type == "log":
+        return isinstance(msg["level"], str) and isinstance(msg["text"], str)
+    if msg_type == "status":
+        return msg["state"] in TRAINING_STATUSES
+    return isinstance(msg["message"], str) and isinstance(msg["traceback"], str)
 
 
 def watchdog_error(process, last_status: str | None) -> dict | None:

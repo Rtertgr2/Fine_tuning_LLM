@@ -103,7 +103,7 @@ git commit -m "feat: core/ipc_bridge.py message protocol + watchdog + abort esca
 - Consumes: `safe_defaults.MAX_STEPS/SAVE_STEPS/SEED/MAX_SEQ_LENGTH_DEFAULT/DEFAULT_BATCH_SIZE`
 - Produces:
   - `safe_defaults` เพิ่ม: `GRADIENT_ACCUMULATION_STEPS: int = 8`, `LEARNING_RATE: float = 2e-4`, `WARMUP_RATIO: float = 0.03`, `SAVE_TOTAL_LIMIT: int = 2`, `SAVE_STEPS: int = 100`, `MAX_STEPS: int = 500`, `NONFINITE_ABORT_THRESHOLD: int = 3`, `LORA_RANK_DEFAULT: int = 8`, `LORA_TARGET_MODULES: tuple[str, ...] = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")`, `TRAIN_CODE_LIMIT: int = 8192`
-  - `build_training_args(output_dir: str, *, max_steps: int = MAX_STEPS, save_steps: int = SAVE_STEPS) -> SFTConfig` ใน `core/trainer_worker.py`
+  - `build_training_args(output_dir: str, *, max_steps: int = MAX_STEPS, save_steps: int = SAVE_STEPS, max_seq_length: int = MAX_SEQ_LENGTH_DEFAULT) -> SFTConfig` ใน `core/trainer_worker.py` — `max_seq_length` ต้องส่งถึง `SFTConfig.max_length` เพราะ packing ตัดที่ค่านี้ (ถ้า hardcode → UI ตั้งค่าใน Phase 4 ถูกเพิกเฉยเงียบ ๆ; review finding #1)
 
 - [ ] **Step 1: เขียน `tests/test_trainer_worker.py`** — 2 tests:
   - `test_args_pin_hyperparams`: `args = build_training_args("data_cache/x")` แล้ว assert `learning_rate == 2e-4`, `warmup_steps == 15` (=round(0.03×500)), `gradient_accumulation_steps == 8`, `per_device_train_batch_size == 1`, `seed == 42`, `save_total_limit == 2`, `save_steps == 100`, `max_steps == 500`, `gradient_checkpointing is True`, `optim == "adamw_torch"`, `bf16 is True`, `max_length == 1024`, `max_length <= 2048`, `packing is True`, `dataset_text_field == "text"`
@@ -194,7 +194,7 @@ git commit -m "feat: core/ipc_bridge.py message protocol + watchdog + abort esca
     3. `AutoTokenizer.from_pretrained(model_id)` → `ensure_fim_tokens(tokenizer, fim_tokens.values())`
     4. `codes = iter_codes(dataset_id, dataset_column, limit=code_limit)` → `texts = list(build_samples(codes, fim_tokens=fim_tokens, eos=tokenizer.eos_token, tokenizer=tokenizer, max_seq_length=config["max_seq_length"]))` → `Dataset.from_dict({"text": texts})`
     5. model `AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16, attn_implementation="sdpa")`; `LoraConfig(r=lora_rank, lora_alpha=lora_rank*2, lora_dropout=0.0, target_modules=list(LORA_TARGET_MODULES), task_type="CAUSAL_LM")`
-    6. `AtomicSaveTrainer(model=..., args=build_training_args(output_dir, max_steps=config["max_steps"], save_steps=config.get("save_steps", SAVE_STEPS)), train_dataset=..., processing_class=tokenizer, peft_config=lora, callbacks=[StreamToQueueCallback(queue)])` → `trainer.train()`
+    6. `AtomicSaveTrainer(model=..., args=build_training_args(output_dir, max_steps=config["max_steps"], save_steps=config.get("save_steps", SAVE_STEPS), max_seq_length=config["max_seq_length"]), train_dataset=..., processing_class=tokenizer, peft_config=lora, callbacks=[StreamToQueueCallback(queue)])` → `trainer.train()`
     7. จบ: ถ้า `callback.aborted` เป็น False → `queue.put(status_msg("finished"))`
     8. `except Exception as exc:` → `queue.put(error_msg(str(exc), traceback.format_exc()))` + `queue.put(status_msg("aborted"))` + `raise`
   - `scripts/pipeline_smoke.py` — รัน `mp.set_start_method("spawn", force=True)`; รับ `--mode full|abort|all` (default `all`):

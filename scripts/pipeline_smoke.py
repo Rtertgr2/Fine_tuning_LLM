@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import multiprocessing as mp
 import queue as queue_mod
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -25,6 +26,8 @@ from configs.safe_defaults import (
     DEFAULT_DATASET_COLUMN,
     DEFAULT_DATASET_ID,
     DEFAULT_MODEL_ID,
+    LORA_RANK_DEFAULT,
+    MAX_SEQ_LENGTH_DEFAULT,
 )
 from core.ipc_bridge import abort_process, validate_message
 from core.trainer_worker import run_training
@@ -45,11 +48,11 @@ def _base_config(output_dir: str, *, max_steps: int, save_steps: int) -> dict:
         "dataset_column": DEFAULT_DATASET_COLUMN,
         "fim_registry_key": "qwen",
         "output_dir": output_dir,
-        "max_seq_length": 1024,
+        "max_seq_length": MAX_SEQ_LENGTH_DEFAULT,
         "max_steps": max_steps,
         "save_steps": save_steps,
         "code_limit": 64,
-        "lora_rank": 8,
+        "lora_rank": LORA_RANK_DEFAULT,
     }
 
 
@@ -82,6 +85,7 @@ def mode_full() -> None:
     free_before = _free_vram_gb()
     print(f"[full] VRAM free ก่อน spawn: {free_before:.2f} GB")
     out_dir = Path("data_cache/phase3_full")
+    shutil.rmtree(out_dir, ignore_errors=True)  # ล้างของเก่า — ไม่งั้น assert ถูก satisfy โดย leftover
     proc, q = _spawn(_base_config(str(out_dir), max_steps=6, save_steps=2))
     msgs = _collect(
         proc,
@@ -99,17 +103,22 @@ def mode_full() -> None:
     checkpoints = sorted(out_dir.glob("checkpoint-*"))
     assert checkpoints, f"ไม่มี checkpoint ใน {out_dir}"
     assert not list(out_dir.rglob("*.saving")), "*.saving ค้าง — atomic save ไม่ผ่าน"
+    time.sleep(2)  # ให้ driver reclaim VRAM ก่อนวัด (เทียบทุก mode ตาม plan)
     free_after = _free_vram_gb()
-    print(f"[full] VRAM free หลัง exit: {free_after:.2f} GB")
+    assert free_after >= free_before - VRAM_TOLERANCE_GB, (
+        f"VRAM ไม่คืน: ก่อน {free_before:.2f} GB → หลัง {free_after:.2f} GB "
+        f"(เกิน tolerance {VRAM_TOLERANCE_GB} GB)"
+    )
+    print(f"[full] VRAM free หลัง exit: {free_after:.2f} GB (คืนแล้ว)")
     print("[full] OK")
 
 
 def mode_abort() -> None:
     free_before = _free_vram_gb()
     print(f"[abort] VRAM free ก่อน spawn: {free_before:.2f} GB")
-    proc, q = _spawn(
-        _base_config("data_cache/phase3_abort", max_steps=500, save_steps=100)
-    )
+    out_dir = Path("data_cache/phase3_abort")
+    shutil.rmtree(out_dir, ignore_errors=True)  # ล้างของเก่า เหมือน mode_full
+    proc, q = _spawn(_base_config(str(out_dir), max_steps=500, save_steps=100))
     msgs = _collect(
         proc, q, stop=lambda m: m["type"] == "metric", deadline_s=DEADLINE_S
     )

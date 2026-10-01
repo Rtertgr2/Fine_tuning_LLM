@@ -46,11 +46,14 @@ def build_training_args(
     *,
     max_steps: int = MAX_STEPS,
     save_steps: int = SAVE_STEPS,
+    max_seq_length: int = MAX_SEQ_LENGTH_DEFAULT,
 ) -> SFTConfig:
     """สร้าง SFTConfig จาก safe_defaults — ทุกค่าถูก pin ด้วย test แล้ว
 
     `warmup_steps = round(WARMUP_RATIO × max_steps)`: transformers 5.x ถอด
     `warmup_ratio` ออกแล้ว — คงสัดส่วน 3% ไว้แบบ dynamic (500 steps → 15)
+    `max_seq_length` ต้องมาจาก config เพราะ packing ตัด/รวม token ที่ `max_length`
+    (hardcode = UI ตั้งค่าใน Phase 4 ถูกเพิกเฉยเงียบ ๆ)
     """
     return SFTConfig(
         output_dir=output_dir,
@@ -68,7 +71,7 @@ def build_training_args(
         bf16=True,
         logging_steps=1,
         report_to=[],
-        max_length=MAX_SEQ_LENGTH_DEFAULT,
+        max_length=max_seq_length,
         dataset_text_field="text",
         packing=True,
     )
@@ -117,11 +120,25 @@ def ensure_fim_tokens(tokenizer, fim_tokens: Iterable[str]) -> dict[str, int]:
     return ids
 
 
+def is_checkpoint_dir(path) -> bool:
+    """True เมื่อ basename เป็น `checkpoint-<digits>` — atomic path มีเฉพาะชื่อนี้เท่านั้น
+
+    กันกับดักข้อมูลหาย: ถ้า `_save` ถูกเรียกด้วย run root ที่มี checkpoint-* ซ้อนอยู่
+    (เช่น `trainer.save_model(run_dir)` ใน Phase 5) `commit_checkpoint` จะ rename+rmtree
+    ทิ้ง checkpoint ทั้งหมด — ของชื่ออื่นต้อง save ตรง ๆ ผ่าน super
+    """
+    name = Path(path).name
+    return name.startswith("checkpoint-") and name[len("checkpoint-") :].isdigit()
+
+
 def commit_checkpoint(tmp_dir: Path, final_dir: Path) -> None:
-    """ย้าย checkpoint จากโฟลเดอร์ชั่วคราว → ที่อยู่จริงแบบ atomic — ไฟล์ไม่มีวันเสียกลางทาง
+    """ย้าย checkpoint จากโฟลเดอร์ชั่วคราว → ที่อยู่จริงแบบ atomic — model weights ไม่มีวันเสียกลางทาง
 
     ถ้า final มีของเดิมอยู่ → เก็บออกไปเป็น *.old ก่อน แล้ว rename เข้าที่ แล้วล้าง *.old
     (ถ้าโดน abort กลาง save → เหลือแค่ *.saving รอบถัดไปไม่แตะ checkpoint จริง)
+    หมายเหตุ (ตรงความจริงตาม source transformers): atomic ครอบเฉพาะ weights ที่เขียนผ่าน
+    `_save` — optimizer/scheduler/trainer_state.json เขียนลง checkpoint dir ตรง ๆ ทีหลัง
+    → adapter weights ปลอดภัยเสมอ แต่ resume อาจไม่ครบถ้าโดน kill กลางเขียน checkpoint
     """
     tmp = Path(tmp_dir)
     final = Path(final_dir)
@@ -138,11 +155,12 @@ def commit_checkpoint(tmp_dir: Path, final_dir: Path) -> None:
 class AtomicSaveTrainer(SFTTrainer):
     """SFTTrainer ที่เขียน checkpoint ลงโฟลเดอร์ `.saving` ก่อนค่อย rename เข้าที่ (สเปก §4.4)
 
-    ไม่มี unit test แยก — ถูก exercise โดย commit_checkpoint test + integration run
+    atomic เฉพาะ output_dir ที่ชื่อเป็น `checkpoint-<digits>` — ที่อยู่อื่น (เช่น run root)
+    ให้ super เขียนตรง ๆ เพื่อไม่ให้ checkpoint ที่ซ้อนอยู่ถูกล้าง (ดู `is_checkpoint_dir`)
     """
 
     def _save(self, output_dir: str | None = None, state_dict=None) -> None:
-        if output_dir is None:
+        if output_dir is None or not is_checkpoint_dir(output_dir):
             super()._save(output_dir, state_dict)
             return
         tmp = f"{output_dir}.saving"
@@ -191,7 +209,8 @@ class StreamToQueueCallback(TrainerCallback):
             self.queue.put(status_msg("training"))
 
     def on_save(self, args, state, control, **kwargs):
-        self.queue.put(status_msg("saving"))
+        if not self.aborted:
+            self.queue.put(status_msg("saving"))
 
     def on_train_end(self, args, state, control, **kwargs):
         if not self.aborted:
@@ -229,11 +248,13 @@ def run_training(config: dict, queue_) -> None:
     """เทรนใน process ปัจจุบัน — ส่ง status/metric/log/error ลง `queue_` ให้ UI (สเปก §4.4/§4.5)
 
     flow: validate → starting → โหลด registry/tokenizer/dataset/model → LoRA SFT → finished
-    ผิดพลาดระหว่างกลาง → error (full traceback) + aborted + raise ต่อ (exit code ของ process ≠ 0)
+    ผิดพลาด (รวม config ผิด) → error (full traceback) + aborted + raise ต่อ (exit code ≠ 0)
+    note: "finished" อาจถูกส่ง 2 ครั้ง (on_train_end ของ callback + ท้าย flow — ตรงสเปก Task 4/5
+    ทั้งคู่) → Phase 4 ต้องทนรับ status ซ้ำได้
     """
-    validate_config(config)
-    queue_.put(status_msg("starting"))
     try:
+        validate_config(config)
+        queue_.put(status_msg("starting"))
         registry_path = (
             Path(__file__).resolve().parents[1] / "configs" / "fim_registry.json"
         )
@@ -277,6 +298,7 @@ def run_training(config: dict, queue_) -> None:
                 config["output_dir"],
                 max_steps=config["max_steps"],
                 save_steps=config.get("save_steps", SAVE_STEPS),
+                max_seq_length=config["max_seq_length"],
             ),
             train_dataset=train_dataset,
             processing_class=tokenizer,
