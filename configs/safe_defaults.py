@@ -22,3 +22,16 @@ DEFAULT_MODEL_ID: str = "Qwen/Qwen2.5-Coder-0.5B"
 DEFAULT_DATASET_ID: str = "smangrul/hf-stack-v1"
 DEFAULT_DATASET_COLUMN: str = "content"
 HELDOUT_RATIO: float = 0.10
+
+# --- Estimator (core/estimator.py) ---
+# ค่า hardcode ของโมเดล default (plan.md §4.2) — วัดจริงจาก Phase 1:
+# 498,431,872 = ผลรวมพารามิเตอร์จาก smoke test, 4,399,104 = LoRA r=8 trainable จริง
+DEFAULT_MODEL_NUM_PARAMS: int = 498_431_872
+DEFAULT_MODEL_HIDDEN_SIZE: int = 896
+DEFAULT_MODEL_NUM_LAYERS: int = 24
+DEFAULT_LORA_NUM_PARAMS: int = 4_399_104
+DEFAULT_BATCH_SIZE: int = 1
+ESTIMATOR_OVERHEAD_GB: float = 1.0
+# dims สำรองตอนโหลด config ไม่ได้ (upper bound อนุรักษ์นิยมสำหรับ activation)
+ESTIMATOR_FALLBACK_HIDDEN_SIZE: int = 4096
+ESTIMATOR_FALLBACK_NUM_LAYERS: int = 40
