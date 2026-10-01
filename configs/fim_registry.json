@@ -1,0 +1,17 @@
+{
+  "qwen": {
+    "prefix": "<|fim_prefix|>",
+    "suffix": "<|fim_suffix|>",
+    "middle": "<|fim_middle|>"
+  },
+  "starcoder": {
+    "prefix": "<fim_prefix>",
+    "suffix": "<fim_suffix>",
+    "middle": "<fim_middle>"
+  },
+  "deepseek": {
+    "prefix": "<｜fim begin｜>",
+    "suffix": "<｜fim hole｜>",
+    "middle": "<｜fim end｜>"
+  }
+}
