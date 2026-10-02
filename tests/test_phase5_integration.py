@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import multiprocessing as mp
 import shutil
 import time
 from pathlib import Path
@@ -31,6 +32,18 @@ pytestmark = pytest.mark.integration
 
 GB = 1024**3
 _ITEST_OUTPUT = Path("data_cache/itest_abort")
+
+
+@pytest.fixture(autouse=True)
+def _data_cache_dir():
+    """worktree สดยังไม่มี data_cache (gitignored) — สร้างก่อนทุก integration test
+
+    + ตั้ง start method = spawn (force) ตรงกับ `app.py` — fork จะ crash ทันทีเพราะ
+    `hw.inspect` init XPU ใน parent ไปแล้ว (§5 Driver Deadlock)
+    """
+    Path("data_cache").mkdir(parents=True, exist_ok=True)
+    mp.set_start_method("spawn", force=True)
+    yield
 
 
 def _valid_config(**overrides) -> dict:

@@ -170,8 +170,10 @@ def test_on_eval_error_returns_english_message():
     h = _make_handlers(ctl)
     rows, err = h["on_eval"](*_cfg_args())
     assert rows is None
-    assert err.startswith("**Evaluation failed:**")
+    # span wrapper สีแดงตาม pattern handler อื่น — ข้อความ English ต้องอยู่ข้างในครบ
+    assert "**Evaluation failed:**" in err
     assert "base exploded" in err
+    assert err.endswith("</span>")
 
 
 def test_build_dashboard_has_eval_widgets():
