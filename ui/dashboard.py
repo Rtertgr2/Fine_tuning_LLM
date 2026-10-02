@@ -182,6 +182,23 @@ def _make_handlers(controller) -> dict:
         except Exception as exc:  # noqa: BLE001 — แสดง error ทุกชนิดใน UI (English เสมอ)
             return None, f'<span style="color:#dc2626">**Evaluation failed:** {exc}</span>'
 
+    def on_eval_render():
+        """auto-render เมื่อ eval JSON ครบ (spec §3.4 "เลือก: auto-render") — ไม่บังคับรันใหม่"""
+        base_path = ev.EVAL_DIR / "base.json"
+        fine_path = ev.EVAL_DIR / "finetuned.json"
+        if not (base_path.exists() and fine_path.exists()):
+            return None, ""  # ยังไม่เคยรัน eval → เงียบ
+        try:
+            base = json.loads(base_path.read_text(encoding="utf-8"))
+            fine = json.loads(fine_path.read_text(encoding="utf-8"))
+            rows, _qualitative = ev.compare_results(base, fine)
+            return rows, ""
+        except Exception as exc:  # noqa: BLE001 — JSON เสีย → แสดงใน UI (English เสมอ)
+            return None, (
+                '<span style="color:#dc2626">'
+                f"**Failed to load eval results:** {exc}</span>"
+            )
+
     def on_save_adapter(output_dir):
         try:
             dest = save_adapter_only(output_dir)
@@ -204,6 +221,7 @@ def _make_handlers(controller) -> dict:
         "on_tick": on_tick,
         "on_predict": on_predict,
         "on_eval": on_eval,
+        "on_eval_render": on_eval_render,
         "on_save_adapter": on_save_adapter,
         "on_merge": on_merge,
     }
@@ -287,7 +305,7 @@ def build_dashboard(controller) -> gr.Blocks:
             # ---------------------------------------------------------- #
             # Tab 3: Playground & Export
             # ---------------------------------------------------------- #
-            with gr.Tab("Playground & Export"):
+            with gr.Tab("Playground & Export") as tab3:
                 prefix_in = gr.Code(label="Prefix", language="python", lines=6)
                 suffix_in = gr.Code(label="Suffix", language="python", lines=6)
                 predict_btn = gr.Button("Predict Middle", variant="secondary")
@@ -349,5 +367,7 @@ def build_dashboard(controller) -> gr.Blocks:
             h["on_eval"], inputs=cfg_inputs,
             outputs=[eval_table, eval_error_md], concurrency_id="model_load",
         )
+        # auto-render เมื่อ JSON ครบ (spec §3.4) — สลับมาแท็บนี้แล้วตารางเดิมขึ้นทันที
+        tab3.select(h["on_eval_render"], outputs=[eval_table, eval_error_md])
 
     return demo

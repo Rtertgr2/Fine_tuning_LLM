@@ -210,3 +210,73 @@ def test_on_tick_returns_nine_outputs():
     eval_lock = out[8]
     assert isinstance(eval_lock, gr.Button)
     assert eval_lock.interactive is False  # training_active → ปุ่ม eval ถูกล็อก
+
+
+# ---------------------------------------------------------------------------
+# F5: auto-render เมื่อ eval JSON ครบ (spec §3.4 "เลือก: auto-render")
+# ---------------------------------------------------------------------------
+
+
+def _write_eval_json(dirpath, mode, em, f1, n=3):
+    import json as _json
+
+    dirpath.mkdir(parents=True, exist_ok=True)
+    (dirpath / f"{mode}.json").write_text(
+        _json.dumps(
+            {
+                "mode": mode,
+                "n": n,
+                "exact_match_pct": em,
+                "token_f1_mean": f1,
+                "per_case": [],
+                "samples": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_on_eval_render_missing_files_returns_empty(monkeypatch, tmp_path):
+    from ui.dashboard import _make_handlers
+
+    monkeypatch.setattr("ui.dashboard.ev.EVAL_DIR", tmp_path)
+    h = _make_handlers(EvalController())
+    rows, err = h["on_eval_render"]()
+    assert rows is None
+    assert err == ""  # ยังไม่เคยรัน eval → เงียบ ไม่ใช่ error
+
+
+def test_on_eval_render_renders_when_both_jsons_exist(monkeypatch, tmp_path):
+    from ui.dashboard import _make_handlers
+
+    monkeypatch.setattr("ui.dashboard.ev.EVAL_DIR", tmp_path)
+    _write_eval_json(tmp_path, "base", 1.0, 0.257)
+    _write_eval_json(tmp_path, "finetuned", 3.0, 0.328)
+
+    h = _make_handlers(EvalController())
+    rows, err = h["on_eval_render"]()
+    assert err == ""
+    assert rows[0][0] == "Exact Match %"
+    assert float(rows[0][2]) > float(rows[0][1])  # fine ดีกว่า base
+
+
+def test_on_eval_render_corrupt_json_returns_english_error(monkeypatch, tmp_path):
+    from ui.dashboard import _make_handlers
+
+    monkeypatch.setattr("ui.dashboard.ev.EVAL_DIR", tmp_path)
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "base.json").write_text("{not json", encoding="utf-8")
+    (tmp_path / "finetuned.json").write_text("{}", encoding="utf-8")
+
+    h = _make_handlers(EvalController())
+    rows, err = h["on_eval_render"]()
+    assert rows is None
+    assert "**Failed to load eval results:**" in err
+
+
+def test_dashboard_wires_auto_render_event():
+    """tab3.select → on_eval_render ต้องถูก wire จริง (api_name ปรากฏใน config)"""
+    demo = build_dashboard(FakeController())
+    cfg = demo.get_config_file()
+    names = [d.get("api_name") for d in cfg.get("dependencies", [])]
+    assert "on_eval_render" in names  # config เก็บชื่อไม่มี leading slash (view_api แสดง /)

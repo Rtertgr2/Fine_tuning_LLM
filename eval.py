@@ -81,8 +81,17 @@ def _run_compare(eval_dir: Path) -> int:
         fine["exact_match_pct"] >= base["exact_match_pct"]
         and fine["token_f1_mean"] >= base["token_f1_mean"]
     )
-    print("\nPASS — fine-tuned ≥ base on all metrics" if passed else "\nFAIL — base better on some metric")
-    return 0 if passed else 1
+    if passed:
+        print("\nPASS — fine-tuned ≥ base on all metrics")
+        return 0
+    # spec §3.3: FAIL ต้องบอกชื่อ metric ที่ base ดีกว่า
+    failing = []
+    if fine["exact_match_pct"] < base["exact_match_pct"]:
+        failing.append("Exact Match %")
+    if fine["token_f1_mean"] < base["token_f1_mean"]:
+        failing.append("Token F1")
+    print(f"\nFAIL — base better on: {', '.join(failing)}")
+    return 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -111,6 +120,10 @@ def main(argv: list[str] | None = None) -> int:
             mode=args.mode,
             n_cases=args.n_cases,
             eval_dir=args.eval_dir,
+            # spec §3.3: พิมพ์ progress ทุก 10 cases (gating อยู่ใน evaluator — ทุก consumer ได้เหมือนกัน)
+            progress=lambda done, total: print(
+                f"Evaluating {args.mode}: {done}/{total}", flush=True
+            ),
         )
     except Exception as exc:  # noqa: BLE001 — CLI แปลงทุก exception เป็น exit 1
         print(f"eval failed: {exc}", file=sys.stderr)

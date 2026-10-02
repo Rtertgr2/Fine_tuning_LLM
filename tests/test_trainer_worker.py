@@ -380,3 +380,57 @@ def test_peak_xpu_memory_uses_torch(monkeypatch):
         wa.torch.xpu, "max_memory_allocated", lambda: 1 * 1024**3, raising=False
     )
     assert wa.peak_xpu_memory_gb("allocated") == 1.0
+
+
+def test_run_training_filters_heldout_from_iter_codes(monkeypatch):
+    """spec Phase 5: `run_training` ต้องกรอง heldout ก่อนสร้างชุดเทรน (mock iter_codes)"""
+    from core.dataset_builder import is_heldout
+
+    heldout_code = next(c for c in (f"heldout_{i}" for i in range(5000)) if is_heldout(c))
+    train_code = next(c for c in (f"train_{i}" for i in range(5000)) if not is_heldout(c))
+    assert heldout_code != train_code
+
+    recorded: list[list[str]] = []
+
+    class _Tok:
+        eos_token = "</s>"
+
+    class _Trainer:
+        def __init__(self, **_kw):
+            pass
+
+        def train(self):
+            pass
+
+    monkeypatch.setattr(wa.AutoTokenizer, "from_pretrained", lambda mid: _Tok())
+    monkeypatch.setattr(wa, "ensure_fim_tokens", lambda tok, toks: None)
+    monkeypatch.setattr(wa, "iter_codes", lambda *a, **k: [heldout_code, train_code])
+
+    def _fake_build_samples(codes, **_kw):
+        recorded.append(list(codes))
+        return ["dummy text"]
+
+    monkeypatch.setattr(wa, "build_samples", _fake_build_samples)
+    monkeypatch.setattr(
+        wa.AutoModelForCausalLM, "from_pretrained", lambda *a, **k: object()
+    )
+    monkeypatch.setattr(wa, "AtomicSaveTrainer", _Trainer)
+
+    cfg = {
+        "model_id": "Qwen/Qwen2.5-Coder-0.5B",
+        "dataset_id": "smangrul/hf-stack-v1",
+        "dataset_column": "content",
+        "fim_registry_key": "qwen",
+        "output_dir": "data_cache/x",
+        "max_seq_length": 1024,
+        "max_steps": 1,
+        "code_limit": 100,
+        "lora_rank": 8,
+    }
+    q = FakeQueue()
+    wa.run_training(cfg, q)
+
+    # heldout ห้ามหลุดเข้าชุดเทรน — filter_train_codes ถูก apply กับ output ของ iter_codes
+    assert recorded == [[train_code]]
+    assert q.messages[-1] == {"type": "status", "state": "finished"}
+    assert all(m.get("type") != "error" for m in q.messages)

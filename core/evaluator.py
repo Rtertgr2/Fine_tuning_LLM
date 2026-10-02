@@ -137,7 +137,8 @@ def evaluate_cases(
                 "gt": case.middle,
             }
         )
-        if progress is not None:
+        # spec §3.3: progress ทุก 10 cases + ครั้งสุดท้ายเสมอ (กัน flood log ทั้ง CLI และ UI worker)
+        if progress is not None and ((i + 1) % 10 == 0 or i + 1 == total):
             progress(i + 1, total)
     return {
         "per_case": per_case,

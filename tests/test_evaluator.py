@@ -193,12 +193,26 @@ def test_evaluate_cases_aggregates_and_progress():
         model, tok, cases, fim_tokens=FIM, device="cpu",
         progress=lambda done, total: seen.append((done, total)),
     )
-    assert seen == [(1, 2), (2, 2)]
+    # spec §3.3: progress ทุก 10 cases + ครั้งสุดท้ายเสมอ (total=2 < 10 → มีแค่ครั้งสุดท้าย)
+    assert seen == [(2, 2)]
     assert result["exact_match_pct"] == 50.0
     assert result["token_f1_mean"] == 0.5  # (1.0 + 0.0) / 2
     assert len(result["per_case"]) == 2
     assert result["per_case"][1]["exact"] is False
     assert result["per_case"][0]["gt"] == "return 1"
+
+
+def test_progress_fires_every_ten_and_final():
+    """spec §3.3: progress ทุก 10 cases (ไม่ใช่ทุก case — กัน flood log)"""
+    tok = FakeTok()
+    cases = [ev.EvalCase("a", "b", "return 1")] * 12
+    model = FakeModel("return 1", tok)
+    seen: list[tuple[int, int]] = []
+    ev.evaluate_cases(
+        model, tok, cases, fim_tokens=FIM, device="cpu",
+        progress=lambda done, total: seen.append((done, total)),
+    )
+    assert seen == [(10, 12), (12, 12)]
 
 
 def _valid_config(**overrides) -> dict:

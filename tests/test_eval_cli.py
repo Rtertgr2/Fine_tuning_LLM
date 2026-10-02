@@ -42,7 +42,23 @@ def test_compare_fail_when_base_better(tmp_path, capsys):
     rc = cli_main(["--compare", "--eval-dir", eval_dir])
     out = capsys.readouterr().out
     assert rc == 1
-    assert "FAIL" in out
+    # spec §3.3: FAIL ต้องพิมพ์ชื่อ metric ที่ base ดีกว่า
+    fail_line = next(line for line in out.splitlines() if "FAIL" in line)
+    assert "Exact Match" in fail_line
+    assert "Token F1" in fail_line
+
+
+def test_compare_fail_names_only_failing_metric(tmp_path, capsys):
+    # fine ดีกว่าเรื่อง EM แต่แย่กว่าเรื่อง F1 → FAIL ต้องชี้แค่ Token F1
+    base = _result("base", em=4.0, f1=0.5)
+    fine = _result("finetuned", em=8.0, f1=0.3)
+    eval_dir = _write_two(tmp_path, base, fine)
+    rc = cli_main(["--compare", "--eval-dir", eval_dir])
+    out = capsys.readouterr().out
+    assert rc == 1
+    fail_line = next(line for line in out.splitlines() if "FAIL" in line)
+    assert "Token F1" in fail_line
+    assert "Exact Match" not in fail_line
 
 
 def test_compare_missing_file(tmp_path, capsys):
@@ -141,3 +157,26 @@ def test_compare_renders_qualitative_to_stdout(tmp_path, capsys):
     out = capsys.readouterr().out
     assert rc == 0
     assert "right" in out  # ตัวอย่าง qualitative ถูกพิมพ์ (spec §8.3)
+
+
+def test_mode_prints_progress_via_callback(monkeypatch, capsys):
+    """spec §3.3: --mode ต้องส่ง progress callback ให้ run_eval (พิมพ์ทุก 10 cases)"""
+    import eval as eval_module
+
+    def fake_run_eval(config, *, mode, n_cases=100, eval_dir=None, progress=None, **kw):
+        assert callable(progress), "CLI ต้องส่ง progress callback"
+        progress(10, 100)   # evaluator gating จะเรียกเฉพาะทุก 10 + ครั้งสุดท้าย
+        progress(100, 100)
+        return {
+            "mode": mode,
+            "n": 100,
+            "exact_match_pct": 1.0,
+            "token_f1_mean": 0.1,
+        }
+
+    monkeypatch.setattr(eval_module.ev, "run_eval", fake_run_eval)
+    rc = cli_main(["--mode", "base", "--eval-dir", "/tmp/x"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "10/100" in out
+    assert "100/100" in out
