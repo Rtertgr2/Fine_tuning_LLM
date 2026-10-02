@@ -65,6 +65,30 @@ Flow บน UI:
    กด **Run Evaluation** เทียบ base vs fine-tuned บน held-out set,
    แล้ว **Save Adapter Only** หรือ **Merge & Export Full Weights**
 
+## โมเดล/ดาต้าเซ็ตในเครื่อง (dropdown detect)
+
+ช่อง **Model** และ **Dataset** เป็น dropdown ที่ detect โฟลเดอร์ในโปรเจกต์ให้อัตโนมัติ
+(refresh เองทุกครั้งที่สลับมาแท็บ Configuration) — พิมพ์ค่าใหม่เองก็ได้:
+
+| โฟลเดอร์ | เนื้อหา | ตัวอย่างค่าใน dropdown |
+|---|---|---|
+| `models/` | โฟลเดอร์โมเดล (มี `config.json` + น้ำหนัก) | วาง `models/My-Model` → เลือก `My-Model` |
+| `datasets/` | โฟลเดอร์ดาต้าเซ็ต (ไฟล์ `.parquet`) | วาง `datasets/my-ds` → เลือก `my-ds` |
+
+- **ดาต้าเซ็ตท้องถิ่น**: อ่าน `.parquet` ตรง ๆ แบบ streaming ทีละ batch — **รองรับ dataset ใหญ่ ~20GB**
+  (ไม่ convert เป็น arrow cache ซ้ำ กินดิสก์แค่ไฟล์ต้นฉบับ, ไม่โหลดทั้งไฟล์ลง RAM,
+  เทรนใช้ ~8,000 แถวแรกเหมือนเดิม — ขนาด dataset ไม่กระทบเวลาเทรน/VRAM)
+- **โมเดล Hub** (เช่น `Qwen/Qwen2.5-Coder-0.5B`): คงใช้ HF cache เดิม ไม่ copy เข้าโปรเจกต์ —
+  เลือกแล้วใช้ได้ทันทีถ้าเคยโหลด; โมเดลรุ่นใหม่พิมพ์ model id ลง dropdown แล้วระบบดึง config จาก Hub เอง
+- **Estimator** อ่าน `config.json` จากโฟลเดอร์ท้องถิ่นได้โดยตรง (นอกเหนือจาก Hub)
+- **LoRA** target modules ถูก filter ตามชื่อเลเยอร์จริงของโมเดล (รองรับ family อื่นที่ชื่อเลเยอร์ต่างกัน)
+  — ไม่ตรงสักตัว → error อังกฤษบอกให้ตรวจ family ของโมเดล
+- ไฟล์ผิดรูปแบบ (โฟลเดอร์ไม่มี `.parquet` / คอลัมน์ไม่ตรง / config ไม่ครบ) → error อังกฤษบอกวิธีแก้
+
+> เหตุผลที่ขัด plan.md §4.4 (สั่ง streaming): dataset ตัวอย่างเล็กแค่ ~30MB และการอ่าน parquet
+> ตรงทำให้ใช้ออฟไลน์ได้ทันที + รองรับชุดใหญ่โดยไม่กินดิสก์ซ้ำ — semantics "แถวแรก `code_limit`
+> ตัวอย่าง" และ order/holdout เดิมทั้งหมดยังคงเดิม
+
 ## Eval (spec §3.3)
 
 Evaluator วัด **FIM Exact Match** + **Token F1** บนชุด held-out ที่แยกด้วย md5 คงที่
