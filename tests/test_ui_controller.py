@@ -418,3 +418,77 @@ def test_abort_escalation_failure_keeps_lock():
     assert ctl.abort() is False
     assert ctl.training_active is True  # ยังปลดล็อกไม่ได้ (I3/M8)
     assert fp.is_alive() is True
+
+
+# ---------------------------------------------------------------------------
+# Task 5: run_eval (spawn + drain + EVAL_DONE + JSON — VRAM contention I3)
+# ---------------------------------------------------------------------------
+
+
+def _eval_factory(queue_msgs, *, alive=True):
+    """คืน (process_factory, fake_queue, holder) สำหรับ run_eval — เหมือน _predict_factory"""
+    fq = FakeQueue(queue_msgs)
+    holder = {}
+
+    def process_factory(target, args):
+        fp = FakeProcess(alive=alive, dies_on_terminate=True)
+        fp.target = target
+        fp.args = args
+        holder["process"] = fp
+        return fp
+
+    return process_factory, fq, holder
+
+
+def test_run_eval_happy_path(tmp_path):
+    """log ถูก append เข้า _logs (เว้น EVAL_DONE), คืน dict จาก JSON, child ถูกเก็บ"""
+    import json as _json
+
+    (tmp_path / "base.json").write_text(
+        _json.dumps({"mode": "base", "n": 2, "exact_match_pct": 50.0}),
+        encoding="utf-8",
+    )
+    factory, fq, holder = _eval_factory(
+        [log_msg("INFO", "Evaluating base: 1/2"), log_msg("INFO", "EVAL_DONE")]
+    )
+    ctl = TrainingController(
+        queue_factory=lambda: fq, process_factory=factory
+    )
+    result = ctl.run_eval(valid_config(), "base", eval_dir=tmp_path, timeout=1.0)
+    assert result["mode"] == "base"
+    assert result["n"] == 2
+    assert any("Evaluating base: 1/2" in line for line in ctl._logs)
+    assert not any("EVAL_DONE" in line for line in ctl._logs)  # marker ไม่โชว์ UI
+    assert holder["process"].is_alive() is False  # finally เก็บ child เสมอ (I3)
+
+
+def test_run_eval_rejects_while_training():
+    """Review Focus #3: eval ชน training → VRAM stacking → ต้อง raise ก่อน spawn"""
+    factory, fq, _h = _eval_factory([])
+    ctl = TrainingController(queue_factory=lambda: fq, process_factory=factory)
+    ctl.start(valid_config())  # spawn → training_active = True
+    with pytest.raises(RuntimeError, match="VRAM contention"):
+        ctl.run_eval(valid_config(), "base", eval_dir="/tmp/x", timeout=1.0)
+    from core.trainer_worker import run_training
+
+    assert _h["process"].target is run_training  # ยังเป็น process ของ training — ไม่ spawn ซ้อน
+
+
+def test_run_eval_error_raises_and_cleans_up(tmp_path):
+    """error_msg จาก child → RuntimeError + finally เก็บ child (I3)"""
+    factory, fq, holder = _eval_factory(
+        [error_msg("eval exploded", "tb here")], alive=True
+    )
+    ctl = TrainingController(queue_factory=lambda: fq, process_factory=factory)
+    with pytest.raises(RuntimeError, match="eval exploded"):
+        ctl.run_eval(valid_config(), "base", eval_dir=tmp_path, timeout=1.0)
+    assert holder["process"].is_alive() is False
+
+
+def test_run_eval_dead_child_raises(tmp_path):
+    """child ตายเงียบ → RuntimeError ทันที ไม่รอ timeout (M1)"""
+    factory, fq, holder = _eval_factory([], alive=False)
+    ctl = TrainingController(queue_factory=lambda: fq, process_factory=factory)
+    with pytest.raises(RuntimeError, match="died without"):
+        ctl.run_eval(valid_config(), "base", eval_dir=tmp_path, timeout=5.0)
+    assert holder["process"] is not None

@@ -394,6 +394,37 @@ def predict_middle(config: dict, prefix: str, suffix: str, queue_) -> None:
         raise
 
 
+EVAL_DONE = "EVAL_DONE"  # marker: eval เสร็จสมบูรณ์ — controller ใช้จบลูป drain (ไม่โชว์ใน UI)
+
+
+def run_eval_worker(
+    config: dict, mode: str, queue_, eval_dir: str | Path | None = None
+) -> None:
+    """spawn target สำหรับ eval (process แยก) — progress → log_msg, จบ → EVAL_DONE
+
+    ผิด → error_msg (message + traceback) + raise — pattern `predict_middle`
+    note: โหลด evaluator ข้างในเพื่อหลบ circular import
+    (core.evaluator ชั้นบนสุด import ฟังก์ชันจากไฟล์นี้)
+    """
+    from core import evaluator as ev
+
+    if eval_dir is None:
+        eval_dir = ev.EVAL_DIR
+    try:
+        ev.run_eval(
+            config,
+            mode=mode,
+            eval_dir=eval_dir,
+            progress=lambda done, total: queue_.put(
+                log_msg("INFO", f"Evaluating {mode}: {done}/{total}")
+            ),
+        )
+        queue_.put(log_msg("INFO", EVAL_DONE))
+    except Exception as exc:
+        queue_.put(error_msg(str(exc), traceback.format_exc()))
+        raise
+
+
 def save_adapter_only(
     output_dir: str | Path, *, exports_dir: str | Path = "exports"
 ) -> Path:

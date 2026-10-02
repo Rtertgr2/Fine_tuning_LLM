@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import json
 import multiprocessing as mp
 import pickle
 import threading
@@ -30,7 +31,14 @@ from core.ipc_bridge import (
     validate_message,
     watchdog_error,
 )
-from core.trainer_worker import predict_middle, run_training, validate_config
+from core.evaluator import EVAL_DIR
+from core.trainer_worker import (
+    EVAL_DONE,
+    predict_middle,
+    run_eval_worker,
+    run_training,
+    validate_config,
+)
 
 # `get_nowait()` ของ mp.Queue อาจคาย error อื่นนอกจาก Empty เมื่อ pipe ถูก kill กลางเขียน
 # (truncated pickle → EOFError/OSError/UnpicklingError) — ห้ามให้หลุดออกจาก tick() ไม่งั้น UI ค้างถาวร
@@ -228,6 +236,78 @@ class TrainingController:
 
     def _append_log(self, level: str, text: str) -> None:
         self._logs.append(f"[{level}] {text}")
+
+    def run_eval(
+        self,
+        config: dict,
+        mode: str,
+        *,
+        eval_dir: str | Path = EVAL_DIR,
+        timeout: float = 900.0,
+    ) -> dict:
+        """spawn `run_eval_worker` ใน process แยก → drain log (เว้น EVAL_DONE) → คืน JSON result
+
+        - ระหว่างเทรนอยู่ห้าม eval (§5 VRAM Contention — Review Focus #3)
+        - child ตายเงียบ/หมด timeout → RuntimeError ทันที
+        - ทุก path ผ่าน finally เก็บ child เสมอ — ห้ามปล่อย orphan (§5 I3)
+        - progress จาก child เข้า `self._logs` ให้ Timer thread โชว์ระหว่างรอ
+        """
+        import time
+
+        if self.training_active:
+            raise RuntimeError(
+                "Training in progress — evaluation is locked (VRAM contention)"
+            )
+        q = self._queue_factory()
+        process = self._process_factory(
+            target=run_eval_worker, args=(config, mode, q, eval_dir)
+        )
+        process.start()
+        deadline = time.monotonic() + timeout
+        try:
+            while True:
+                msg = None
+                try:
+                    msg = q.get_nowait()
+                except Empty:
+                    pass
+                except _DRAIN_ERRORS as exc:
+                    raise RuntimeError(f"IPC pipe broken during evaluation: {exc}")
+
+                if msg is None:
+                    if not process.is_alive():
+                        # child เพิ่งตาย — รอ pipe flush สั้น ๆ แล้วอ่านครั้งสุดท้าย
+                        time.sleep(0.15)
+                        try:
+                            msg = q.get_nowait()
+                        except (Empty,) + _DRAIN_ERRORS:
+                            msg = None
+                        if msg is None:
+                            raise RuntimeError(
+                                "Evaluation process died without a result"
+                            )
+                    elif time.monotonic() >= deadline:
+                        raise RuntimeError(f"Evaluation timeout after {timeout}s")
+                    else:
+                        time.sleep(0.05)
+                        continue
+
+                if not validate_message(msg):
+                    continue
+                if msg["type"] == "error":
+                    raise RuntimeError(msg["message"])
+                if msg["type"] == "log":
+                    if msg["text"] == EVAL_DONE:
+                        break
+                    with self._lock:
+                        self._append_log(msg["level"], msg["text"])
+
+            result_path = Path(eval_dir) / f"{mode}.json"
+            return json.loads(result_path.read_text(encoding="utf-8"))
+        finally:
+            process.join(1.0)
+            if process.is_alive():
+                abort_process(process)
 
 
 def run_predict(
