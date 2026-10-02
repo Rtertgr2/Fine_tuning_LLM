@@ -19,11 +19,12 @@ abort ที่การันตีคืน VRAM จริง, **evaluator เ
 >
 > | Metric | Base | Fine-tuned | Δ |
 > |---|---|---|---|
-> | Exact Match % | 1.0 | 3.0 | **+2.0** |
-> | Token F1 | 0.257 | 0.328 | **+0.07** |
+> | Exact Match % | 1.0 | 2.0 | **+1.0** |
+> | Token F1 | 0.248 | 0.338 | **+0.09** |
 >
-> ตัวอย่างที่ base ผิด → fine-tuned ถูก: comment block ใบอนุญาต (F1 0.22→1.00, 0.28→1.00)
-> และ `_import_structure` ของ transformers (F1 0.30→0.88) — ไม่มี regression เลย (0 case)
+> ตัวอย่างที่ base ผิด → fine-tuned ถูก: header ใบอนุญาต (F1 0.28→1.00, exact fix),
+> `_import_structure` ของ transformers (F1 0.30→1.00) และเคสที่ base เพี้ยนเป็น `!!!...`
+> แต่ fine-tuned เขียน `from ...modeling_tf_outputs import ...` ได้จริง (F1 0→0.68) — ไม่มี regression เลย (0 case)
 
 ## ความต้องการของระบบ
 
