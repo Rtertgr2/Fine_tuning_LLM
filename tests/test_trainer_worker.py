@@ -357,3 +357,26 @@ def test_run_eval_worker_error_sends_error_and_raises(monkeypatch):
     assert len(errs) == 1
     assert errs[0]["message"] == "boom"
     assert "RuntimeError" in errs[0]["traceback"]
+
+
+def test_peak_xpu_memory_zero_when_unavailable(monkeypatch):
+    """XPU ไม่มี → คืน 0.0 (CPU-only machine ห้าม crash)"""
+    monkeypatch.setattr(wa.torch.xpu, "is_available", lambda: False)
+    assert wa.peak_xpu_memory_gb() == 0.0
+
+
+def test_peak_xpu_memory_invalid_kind():
+    with pytest.raises(ValueError, match="reserved"):
+        wa.peak_xpu_memory_gb("nope")
+
+
+def test_peak_xpu_memory_uses_torch(monkeypatch):
+    monkeypatch.setattr(wa.torch.xpu, "is_available", lambda: True)
+    monkeypatch.setattr(
+        wa.torch.xpu, "max_memory_reserved", lambda: 2 * 1024**3, raising=False
+    )
+    assert wa.peak_xpu_memory_gb("reserved") == 2.0
+    monkeypatch.setattr(
+        wa.torch.xpu, "max_memory_allocated", lambda: 1 * 1024**3, raising=False
+    )
+    assert wa.peak_xpu_memory_gb("allocated") == 1.0

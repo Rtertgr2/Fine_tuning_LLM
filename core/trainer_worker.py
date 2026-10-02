@@ -244,6 +244,18 @@ def validate_config(config: dict) -> None:
         )
 
 
+def peak_xpu_memory_gb(kind: str = "reserved") -> float:
+    """คืนค่า peak XPU memory (GB) จาก `torch.xpu.max_memory_<kind>` — ไม่มี XPU → 0.0
+
+    ใช้ตอนจบการเทรน (calibration §8.4) — `kind` รับ "reserved" หรือ "allocated" เท่านั้น
+    """
+    if kind not in ("reserved", "allocated"):
+        raise ValueError(f'kind must be "reserved" or "allocated", got {kind!r}')
+    if not torch.xpu.is_available():
+        return 0.0
+    return getattr(torch.xpu, f"max_memory_{kind}")() / 1024**3
+
+
 def run_training(config: dict, queue_) -> None:
     """เทรนใน process ปัจจุบัน — ส่ง status/metric/log/error ลง `queue_` ให้ UI (สเปก §4.4/§4.5)
 
@@ -309,6 +321,14 @@ def run_training(config: dict, queue_) -> None:
         )
         trainer.train()
         if not callback.aborted:
+            # calibration §8.4 — peak VRAM ตอนจบ (test_once: manual gate Task 10 เก็บค่า)
+            queue_.put(
+                log_msg(
+                    "INFO",
+                    f"xpu_peak_reserved_gb={peak_xpu_memory_gb('reserved'):.2f} "
+                    f"xpu_peak_allocated_gb={peak_xpu_memory_gb('allocated'):.2f}",
+                )
+            )
             queue_.put(status_msg("finished"))
     except Exception as exc:
         queue_.put(error_msg(str(exc), traceback.format_exc()))
