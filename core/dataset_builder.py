@@ -98,6 +98,11 @@ def is_heldout(code: str, heldout_ratio: float = HELDOUT_RATIO) -> bool:
     return int(digest, 16) / _HEX_MAX < heldout_ratio
 
 
+def filter_train_codes(codes: Iterable[str]) -> list[str]:
+    """กรอง heldout ออกจากชุดเทรน — ห้าม train ปนชุดประเมิน (plan.md §8)"""
+    return [code for code in codes if not is_heldout(code)]
+
+
 def iter_codes(
     dataset_id: str,
     column: str,

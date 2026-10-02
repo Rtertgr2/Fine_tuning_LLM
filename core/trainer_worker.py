@@ -37,7 +37,7 @@ from configs.safe_defaults import (
     SEED,
     WARMUP_RATIO,
 )
-from core.dataset_builder import build_samples, iter_codes
+from core.dataset_builder import build_samples, filter_train_codes, iter_codes
 from core.ipc_bridge import error_msg, log_msg, metric_msg, status_msg
 
 
@@ -264,10 +264,12 @@ def run_training(config: dict, queue_) -> None:
         tokenizer = AutoTokenizer.from_pretrained(config["model_id"])
         ensure_fim_tokens(tokenizer, fim_tokens.values())
 
-        codes = iter_codes(
-            config["dataset_id"],
-            config["dataset_column"],
-            limit=config["code_limit"],
+        codes = filter_train_codes(
+            iter_codes(
+                config["dataset_id"],
+                config["dataset_column"],
+                limit=config["code_limit"],
+            )
         )
         texts = list(
             build_samples(

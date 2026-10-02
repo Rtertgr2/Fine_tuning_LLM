@@ -112,6 +112,16 @@ def test_heldout_stable_and_ratio():
     assert HELDOUT_RATIO == 0.10
 
 
+def test_filter_train_codes_removes_all_heldout():
+    codes = [f"line_a_{i}\nline_b_{i}\nline_c_{i}" for i in range(200)]
+    held = {c for c in codes if db.is_heldout(c)}
+    assert held, "fixture ต้องมีทั้งสองฝั่ง (md5 split ~10%)"
+    result = db.filter_train_codes(codes)
+    assert all(not db.is_heldout(c) for c in result)
+    assert set(result) == set(codes) - held  # ไม่หาย/ไม่เพิ่ม
+    assert db.filter_train_codes(codes) == result  # deterministic
+
+
 def test_iter_codes_limits_and_column(monkeypatch):
     calls: dict = {}
 
