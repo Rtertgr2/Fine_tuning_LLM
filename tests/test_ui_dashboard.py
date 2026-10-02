@@ -89,3 +89,122 @@ def test_collect_config_tolerates_cleared_number_fields():
     assert config["max_seq_length"] == MAX_SEQ_LENGTH_DEFAULT
     assert config["max_steps"] == MAX_STEPS
     assert config["code_limit"] == TRAIN_CODE_LIMIT
+
+
+# ---------------------------------------------------------------------------
+# Task 6: Run Evaluation (handler + widgets + tick lock)
+# ---------------------------------------------------------------------------
+
+
+class EvalController:
+    """controller ปลอมสำหรับ on_eval — บันทึกการเรียก + คืนค่าที่กำหนด"""
+
+    training_active = False
+
+    def __init__(self, *, fail_on: str | None = None, n_base: int = 2, n_fine: int = 3):
+        self.calls: list[str] = []
+        self.fail_on = fail_on
+        self._n_base = n_base
+        self._n_fine = n_fine
+
+    def run_eval(self, config, mode, **kw):
+        self.calls.append(mode)
+        if self.fail_on == mode:
+            raise RuntimeError(f"{mode} exploded")
+        return {
+            "mode": mode,
+            "n": self._n_base if mode == "base" else self._n_fine,
+            "exact_match_pct": 10.0 if mode == "base" else 40.0,
+            "token_f1_mean": 0.2 if mode == "base" else 0.5,
+            "per_case": [
+                {
+                    "i": 0,
+                    "exact": mode == "finetuned",
+                    "f1": 1.0 if mode == "finetuned" else 0.0,
+                    "pred": "right" if mode == "finetuned" else "wrong",
+                    "gt": "right",
+                }
+            ],
+            "samples": [],
+        }
+
+    # methods ที่ build_dashboard ไม่เรียกตอนสร้าง แต่ใส่ครบตาม duck-type เดิม
+    def preflight(self, config, user_params_b=None):
+        raise NotImplementedError
+
+    def start(self, config):
+        raise NotImplementedError
+
+    def abort(self):
+        raise NotImplementedError
+
+    def tick(self):
+        raise NotImplementedError
+
+
+def _cfg_args():
+    """ค่า cfg ครบ 10 ช่องตาม cfg_inputs ของ build_dashboard"""
+    return ("m/x", None, "ds", "col", "qwen", 8, 1024, 6, 64, "out")
+
+
+def test_on_eval_runs_base_then_finetuned_sequentially():
+    """รัน base → finetuned เรียงกัน (คนละ process, ไม่ stacking §5) → compare_results"""
+    from ui.dashboard import _make_handlers
+
+    ctl = EvalController()
+    h = _make_handlers(ctl)
+    rows, err = h["on_eval"](*_cfg_args())
+    assert ctl.calls == ["base", "finetuned"]
+    assert err == ""
+    # rows = [EM, F1, n] — fine ดีกว่า base ทุกแถว
+    assert rows[0][0] == "Exact Match %"
+    assert float(rows[0][1]) < float(rows[0][2])
+    assert rows[2][1] == "2" and rows[2][2] == "3"
+
+
+def test_on_eval_error_returns_english_message():
+    """exception → (None, English markdown) — ห้าม raise ออกจาก handler (ภาษาอังกฤษเสมอ)"""
+    from ui.dashboard import _make_handlers
+
+    ctl = EvalController(fail_on="base")
+    h = _make_handlers(ctl)
+    rows, err = h["on_eval"](*_cfg_args())
+    assert rows is None
+    assert err.startswith("**Evaluation failed:**")
+    assert "base exploded" in err
+
+
+def test_build_dashboard_has_eval_widgets():
+    """Tab 3 มี eval_btn/eval_table/eval_error_md (headers ตรง spec §3.4)"""
+    demo = build_dashboard(FakeController())
+    blocks = list(_iter_blocks(demo))
+    buttons = [b for b in blocks if isinstance(b, gr.Button)]
+    assert "Run Evaluation" in {b.value for b in buttons}
+    tables = [b for b in blocks if isinstance(b, gr.Dataframe)]
+    assert len(tables) == 1
+    assert list(tables[0].headers) == ["Metric", "Base", "Fine-tuned", "Δ"]
+
+
+def test_on_tick_returns_nine_outputs():
+    """on_tick คืน 9 แถว (ตัวที่ 9 = eval_btn lock ระหว่างเทรน §5)"""
+
+    class TickController:
+        training_active = True
+        def preflight(self, *a, **k): raise NotImplementedError
+        def start(self, *a): raise NotImplementedError
+        def abort(self): raise NotImplementedError
+        def tick(self):
+            from types import SimpleNamespace
+            return SimpleNamespace(
+                status="training", metrics=[], logs=[], error=None,
+                watchdog=None, training_active=True,
+            )
+
+    from ui.dashboard import _make_handlers
+
+    h = _make_handlers(TickController())
+    out = h["on_tick"](None)
+    assert len(out) == 9
+    eval_lock = out[8]
+    assert isinstance(eval_lock, gr.Button)
+    assert eval_lock.interactive is False  # training_active → ปุ่ม eval ถูกล็อก

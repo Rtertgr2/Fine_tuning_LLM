@@ -21,6 +21,7 @@ from configs.safe_defaults import (
     MAX_STEPS,
     TRAIN_CODE_LIMIT,
 )
+from core import evaluator as ev
 from core.trainer_worker import merge_export, save_adapter_only
 from ui.components import build_metric_plot, verdict_style
 from ui.controller import run_predict
@@ -159,6 +160,7 @@ def _make_handlers(controller) -> dict:
             gr.Button(interactive=ta),
             gr.Button(interactive=not ta),
             gr.Button(interactive=not ta),
+            gr.Button(interactive=not ta),  # eval_btn — ล็อกระหว่างเทรน (§5 VRAM Contention)
         )
 
     def on_predict(*values):
@@ -168,6 +170,17 @@ def _make_handlers(controller) -> dict:
             return run_predict(config, prefix, suffix), ""
         except Exception as exc:  # noqa: BLE001 — แสดง error ทุกชนิดใน UI
             return "", f'<span style="color:#dc2626">**Predict failed:** {exc}</span>'
+
+    def on_eval(*cfg_values):
+        config, _user_params = _collect_config(*cfg_values)
+        try:
+            # sequential — base เสร็จค่อย finetuned (คนละ process, ห้าม stacking §5)
+            base = controller.run_eval(config, "base")
+            fine = controller.run_eval(config, "finetuned")
+            rows, _qualitative = ev.compare_results(base, fine)
+            return rows, ""
+        except Exception as exc:  # noqa: BLE001 — แสดง error ทุกชนิดใน UI (English เสมอ)
+            return None, f'<span style="color:#dc2626">**Evaluation failed:** {exc}</span>'
 
     def on_save_adapter(output_dir):
         try:
@@ -190,6 +203,7 @@ def _make_handlers(controller) -> dict:
         "on_abort": on_abort,
         "on_tick": on_tick,
         "on_predict": on_predict,
+        "on_eval": on_eval,
         "on_save_adapter": on_save_adapter,
         "on_merge": on_merge,
     }
@@ -289,6 +303,14 @@ def build_dashboard(controller) -> gr.Blocks:
                     )
                 export_msg = gr.Markdown("")
 
+                # Eval (Phase 5, spec §3.4) — ล็อกโดย tick ระหว่างเทรน (§5 VRAM Contention)
+                eval_btn = gr.Button("Run Evaluation", variant="secondary")
+                eval_table = gr.Dataframe(
+                    headers=["Metric", "Base", "Fine-tuned", "Δ"],
+                    interactive=False,
+                )
+                eval_error_md = gr.Markdown("")
+
         timer = gr.Timer(value=1.0, active=True)
 
         # -------------------------------------------------------------- #
@@ -309,7 +331,7 @@ def build_dashboard(controller) -> gr.Blocks:
             h["on_tick"], inputs=[verdict_state],
             outputs=[
                 status_md, plot_out, log_out, banner_md,
-                start_btn, abort_btn, predict_btn, merge_btn,
+                start_btn, abort_btn, predict_btn, merge_btn, eval_btn,
             ],
         )
         # M2: predict + merge ใช้ concurrency_id ร่วม — ห้ามสอง process โหลดโมเดลพร้อมกัน
@@ -321,6 +343,11 @@ def build_dashboard(controller) -> gr.Blocks:
         merge_btn.click(
             h["on_merge"], inputs=cfg_inputs, outputs=[export_msg],
             concurrency_id="model_load",
+        )
+        # M2 ร่วมกับ predict/merge — ห้าม eval โหลดโมเดลพร้อมกัน
+        eval_btn.click(
+            h["on_eval"], inputs=cfg_inputs,
+            outputs=[eval_table, eval_error_md], concurrency_id="model_load",
         )
 
     return demo
