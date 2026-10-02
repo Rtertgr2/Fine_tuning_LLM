@@ -32,7 +32,7 @@ DEFAULT_MODEL_HIDDEN_SIZE: int = 896
 DEFAULT_MODEL_NUM_LAYERS: int = 24
 DEFAULT_LORA_NUM_PARAMS: int = 4_399_104
 DEFAULT_BATCH_SIZE: int = 1
-ESTIMATOR_OVERHEAD_GB: float = 1.0
+ESTIMATOR_OVERHEAD_GB: float = 0.8  # calibrate Phase 5 §8.4: เดิม 1.0 → err 11.1% (peak 1.81GB) → 0.80
 # dims สำรองตอนโหลด config ไม่ได้ (upper bound อนุรักษ์นิยมสำหรับ activation)
 ESTIMATOR_FALLBACK_HIDDEN_SIZE: int = 4096
 ESTIMATOR_FALLBACK_NUM_LAYERS: int = 40
