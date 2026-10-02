@@ -1,9 +1,9 @@
 # Fine-tuning-LLM — Fine-tune โมเดลโค้ดบน Intel GPU
 
 โปรเจค fine-tune **Qwen/Qwen2.5-Coder-0.5B** ด้วย **LoRA + Fill-in-the-Middle (FIM)** บนกราฟิกการ์ด
-**Intel Arc (XPU)** ผ่าน `torch 2.14+xpu` — ทั้ง training pipeline รันใน subprocess แยก
+**Intel Arc (XPU)** ผ่าน `torch 2.14+xpu` — training pipeline รันใน subprocess แยก
 พร้อม protocol สื่อสาร UI (`metric`/`log`/`status`/`error`), watchdog จับ zombie process,
-และ abort ที่การันตีคืน VRAM จริง
+abort ที่การันตีคืน VRAM จริง, **evaluator เทียบ base vs fine-tuned** และ Gradio dashboard 3 แท็บ
 
 ## สถานะ
 
@@ -12,8 +12,18 @@
 | 1 | Runtime baseline — XPU + transformers/trl/peft compat | ✅ |
 | 2 | Hardware gate + Estimator + Dataset builder (FIM) | ✅ |
 | 3 | Subprocess training pipeline + IPC | ✅ |
-| 4 | GUI (Gradio) | ⬜ ตามแผน |
-| 5 | Save Adapter / Export | ⬜ ตามแผน |
+| 4 | GUI (Gradio) — Configuration, Mission Control, Playground & Export | ✅ |
+| 5 | Evaluator (Exact Match + Token F1) + `eval.py` + guardrail tests + docs | ✅ |
+
+> **ผล eval จริง** (500 steps, heldout-clean, 100 ตัวอย่าง, §8.2 PASS):
+>
+> | Metric | Base | Fine-tuned | Δ |
+> |---|---|---|---|
+> | Exact Match % | 1.0 | 3.0 | **+2.0** |
+> | Token F1 | 0.257 | 0.328 | **+0.07** |
+>
+> ตัวอย่างที่ base ผิด → fine-tuned ถูก: comment block ใบอนุญาต (F1 0.22→1.00, 0.28→1.00)
+> และ `_import_structure` ของ transformers (F1 0.30→0.88) — ไม่มี regression เลย (0 case)
 
 ## ความต้องการของระบบ
 
@@ -30,25 +40,57 @@ python3.11 -m venv .venv
 # torch ลงผ่าน XPU index แยก (ไม่อยู่ใน requirements.txt)
 .venv/bin/pip install torch --index-url https://download.pytorch.org/whl/xpu
 
-# ที่เหลือล็อกด้วย constraints (เวอร์ชันที่ทดสอบแล้วทั้งหมด)
+# ที่เหลือล็อกด้วย constraints (เวอร์ชันที่ทดสอบแล้วทั้งหมด — requirements pin == ตรง constraints แล้ว)
 .venv/bin/pip install -r requirements.txt -c constraints.txt
 ```
 
-## คำสั่งรัน
+## เริ่มใช้งาน
 
 ```bash
-# 1. ตรวจ hardware + runtime ก่อนเสมอ (ผ่าน = ทุก check สีเขียว)
+# ตรวจ hardware + runtime ก่อนเสมอ (ผ่าน = ทุก check สีเขียว)
 .venv/bin/python scripts/check_runtime.py
 
-# 2. compat spike — SFT + LoRA บน XPU จริง 2 steps
-.venv/bin/python scripts/smoke_sft.py
+# เปิด dashboard (bind 127.0.0.1:7860 เท่านั้น)
+.venv/bin/python app.py
+```
 
-# 3. integration ของ training pipeline ทั้งวงจร
-#    full (เทรน 6 steps จริง) + abort (SIGTERM→SIGKILL) + ตรวจ VRAM คืน
-.venv/bin/python scripts/pipeline_smoke.py --mode all
+Flow บน UI:
 
-# test ทั้งหมด (53 tests)
+1. **Configuration & Pre-flight** — ตั้ง model/dataset/LoRA/seq/steps แล้วกด **Run Environment Check**
+   (คำนวณ VRAM ก่อน — ผ่าน = verdict `safe`/`warning`)
+2. **Training Mission Control** — กด **Start Fine-Tuning** → ดู loss/LR + live log; 途中กด **Abort** ได้
+   (SIGTERM → 10s → SIGKILL, การันตีคืน VRAM)
+3. **Playground & Export** — ทดสอบ **Predict Middle** ด้วย checkpoint ล่าสุด,
+   กด **Run Evaluation** เทียบ base vs fine-tuned บน held-out set,
+   แล้ว **Save Adapter Only** หรือ **Merge & Export Full Weights**
+
+## Eval (spec §3.3)
+
+Evaluator วัด **FIM Exact Match** + **Token F1** บนชุด held-out ที่แยกด้วย md5 คงที่
+(`is_heldout` — code เดียวกันตกข้างเดียวกันเสมอ, train ไม่มีทางปนชุด eval):
+
+```bash
+# รัน eval บนโมเดล base → data_cache/eval/base.json
+.venv/bin/python eval.py --mode base
+
+# รัน eval บน base+LoRA (checkpoint ล่าสุด) → data_cache/eval/finetuned.json
+.venv/bin/python eval.py --mode finetuned
+
+# เทียบผล — fine-tuned ต้องไม่แย่กว่า base ทุก metric (exit 0 = PASS, 1 = FAIL, 2 = ข้อมูลไม่ครบ)
+.venv/bin/python eval.py --compare
+```
+
+บน UI: ปุ่ม **Run Evaluation** ใน Tab 3 รันทั้ง 2 mode แล้วเทียบให้ในตาราง
+(ล็อกปุ่มระหว่างเทรน — กัน stack 2 process โหลดโมเดลพร้อมกัน, §5 VRAM Contention)
+
+## Test
+
+```bash
+# unit suite (เร็ว — integration ถูก deselect ด้วย addopts)
 .venv/bin/python -m pytest tests/ -v
+
+# integration (abort + disk gate + cache growth — ใช้ XPU จริง ~1 นาที)
+.venv/bin/python -m pytest tests/ -m integration -v
 ```
 
 ## โครงสร้างโปรเจค
@@ -57,15 +99,21 @@ python3.11 -m venv .venv
 core/
   hardware.py        # ตรวจ RAM/VRAM/Disk/Driver ก่อนอนุญาตให้เทรน
   estimator.py       # ประมาณการ VRAM ก่อนเริ่ม (static + fallback จาก HF config)
-  dataset_builder.py # แปลงโค้ดดิบเป็น FIM (PSM, line boundary, seed 42)
+  dataset_builder.py # แปลงโค้ดดิบเป็น FIM (PSM, line boundary, seed 42) + heldout split
   ipc_bridge.py      # message protocol 4 ประเภท + watchdog + abort escalation
-  trainer_worker.py  # build_training_args, guardrails, callback, run_training
+  trainer_worker.py  # build_training_args, guardrails, callback, run_training, eval worker
+  evaluator.py       # build_eval_cases, Exact Match + Token F1, run_eval, compare_results
 configs/
   safe_defaults.py   # ค่าคงที่ของระบบทั้งหมด (pin ด้วย test)
   fim_registry.json  # FIM tokens ต่อ family (qwen/starcoder/deepseek)
+ui/
+  controller.py      # TrainingController — start/abort/tick/run_predict/run_eval (ไม่ import gradio)
+  dashboard.py       # Gradio Blocks 3 แท็บ + event wiring
 scripts/             # check_runtime, smoke_sft, pipeline_smoke
-tests/               # pytest 53 ตัว
-docs/                # แผน implementation ราย phase
+tests/               # pytest (unit + integration marker)
+eval.py              # CLI eval — --mode base|finetuned, --compare
+app.py               # entry point (spawn method + bind 127.0.0.1:7860)
+docs/                # spec + implementation plan ราย phase
 ```
 
 ## กติกาสำคัญ
@@ -73,7 +121,20 @@ docs/                # แผน implementation ราย phase
 - **ค่าคงที่ทุกอย่างอยู่ที่ `configs/safe_defaults.py`** — ห้าม hardcode ซ้ำในโค้ดส่วนอื่น
 - Hard cap: batch 1, seq ≤ 2048, lr 2e-4, grad_accum 8, seed 42, max_steps 500
 - FIM: rate 0.5, รูปแบบ **PSM เท่านั้น**, ตัดที่ line boundary เท่านั้น, EOS ท้ายทุก sample
+- **Train ต้องกรอง held-out เสมอ** (`filter_train_codes` ใน `run_training`) — กัน leakage ใส่ชุด eval
 - สื่อสาร UI ผ่าน `multiprocessing.Queue` — 4 message types: `metric`/`log`/`status`/`error`,
   status เป็น state machine: `starting → training → saving → finished | aborted`
 - Abort: SIGTERM → รอ 10 วิ → SIGKILL (คืน VRAM); loss non-finite 3 ครั้งติด → abort เอง
 - Checkpoint เขียนลง `*.saving` ก่อน rename เข้าที่ (atomic) — กันไฟล์เสียถ้าโดน kill กลาง save
+- **VRAM จำกัด 1 การ์ด** — ห้าม spawn predict/eval/merge/training พร้อมกัน
+  (ปุ่มถูกล็อกโดย tick ระหว่างเทรน + `concurrency_id="model_load"` ที่ Gradio)
+
+## Troubleshooting
+
+| อาการ | สาเหตุ/วิธีแก้ |
+|---|---|
+| `no_xpu` ตอน Environment Check | ติดตั้ง level-zero-loader + intel-compute-runtime, login ใหม่ |
+| `insufficient_disk` / `insufficient_ram` | คืนพื้นที่ ≥ 20 GB / RAM ≥ 16 GB (ค่ากำหนดใน `safe_defaults`) |
+| `Cannot re-initialize XPU in forked subprocess` | ห้าม fork หลังแตะ XPU — ใช้ `spawn` เท่านั้น (`app.py` ตั้งให้ที่เดียว) |
+| eval บอก `No checkpoint found ... train first` | ยังไม่เคยเทรนใน `output_dir` นี้ — เทรนก่อนแล้วรัน `--mode finetuned` |
+| `Cannot compare: eval sets differ` | รันทั้ง 2 mode ด้วย `--n-cases` เดียวกัน |

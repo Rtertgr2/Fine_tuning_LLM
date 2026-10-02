@@ -1,19 +1,20 @@
 # Base Deep Learning Core
 # NOTE: torch ไม่อยู่ในไฟล์นี้ — ติดตั้งแยกผ่าน XPU index (ดูคำเตือนด้านล่าง)
-transformers>=4.44.0
-peft>=0.12.0
-trl>=0.12.0            # สำคัญ: API รุ่นใหม่ใช้ processing_class= — ห้ามต่ำกว่า 0.12 (tokenizer= ถูกแทนที่แล้ว)
-datasets>=2.20.0
-accelerate>=0.33.0
+# Phase 5: ทุกบรรทัด pin == ตรง constraints.txt (tested set — pip install ซ้ำได้คงที่)
+transformers==5.18.0
+peft==0.21.1
+trl==1.14.1              # สำคัญ: API รุ่นใหม่ใช้ processing_class= — ห้ามต่ำกว่า 0.12 (tokenizer= ถูกแทนที่แล้ว)
+datasets==5.0.1
+accelerate==1.15.0
 
 # UI & Monitoring
-gradio>=6.0.0           # ต่ำกว่านี้ไม่มี gr.Timer / queue(default_concurrency_limit=) (ต้องตรง constraints.txt)
-matplotlib>=3.8.0       # gr.Plot วาด Loss+LR ใน Mission Control (Phase 4)
-psutil>=5.9.0
+gradio==6.29.0           # ต่ำกว่า 6.0 ไม่มี gr.Timer / queue(default_concurrency_limit=)
+matplotlib==3.11.2       # gr.Plot วาด Loss+LR ใน Mission Control (Phase 4)
+psutil==7.2.2
 
 # Numerical & Data Processing
-numpy>=2.0.0           # เดิมเขียน <2.0.0 ใช้กับ Python 3.12+ ไม่ได้ — ทดสอบจริงใน Compat Spike แล้วค่อยล็อกค่า
-pandas>=2.2.0
+numpy==2.4.6             # เดิมเขียน <2.0.0 ใช้กับ Python 3.12+ ไม่ได้ — freeze แล้วค่า tested
+pandas==3.0.6
 
 # Testing
-pytest>=8.0.0
+pytest==9.1.1
