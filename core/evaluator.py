@@ -228,3 +228,34 @@ def run_eval(
         json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     return result
+
+
+def compare_results(base: dict, finetuned: dict) -> tuple[list[list[str]], list[dict]]:
+    """เปรียบเทียบ 2 JSON → (table rows, ตัวอย่าง base ผิด → fine ถูก up to 5)
+
+    rows: [label, base, finetuned, delta] — EM ทศนิยม 1, F1 ทศนิยม 2
+    qualitative: จับคู่ per_case ด้วย "i" — base exact=False และ finetuned exact=True
+    """
+    b_em, f_em = base["exact_match_pct"], finetuned["exact_match_pct"]
+    b_f1, f_f1 = base["token_f1_mean"], finetuned["token_f1_mean"]
+    rows = [
+        ["Exact Match %", f"{b_em:.1f}", f"{f_em:.1f}", f"{f_em - b_em:+.1f}"],
+        ["Token F1", f"{b_f1:.2f}", f"{f_f1:.2f}", f"{f_f1 - b_f1:+.2f}"],
+        ["Cases", str(base["n"]), str(finetuned["n"]), ""],
+    ]
+    fine_by_i = {c["i"]: c for c in finetuned.get("per_case", [])}
+    qualitative: list[dict] = []
+    for b_case in base.get("per_case", []):
+        if len(qualitative) >= 5:
+            break
+        f_case = fine_by_i.get(b_case["i"])
+        if f_case is not None and not b_case["exact"] and f_case["exact"]:
+            qualitative.append(
+                {
+                    "i": b_case["i"],
+                    "gt": b_case["gt"],
+                    "base_pred": b_case["pred"],
+                    "finetuned_pred": f_case["pred"],
+                }
+            )
+    return rows, qualitative
