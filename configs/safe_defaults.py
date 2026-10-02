@@ -22,6 +22,9 @@ MIN_SAMPLE_LINES: int = 3
 DEFAULT_MODEL_ID: str = "Qwen/Qwen2.5-Coder-0.5B"
 DEFAULT_DATASET_ID: str = "smangrul/hf-stack-v1"
 DEFAULT_DATASET_COLUMN: str = "content"
+# โฟลเดอร์วาง asset สำหรับ dropdown (design model-dataset-picker: detect → dropdown)
+DATASETS_DIR: str = "datasets"
+MODELS_DIR: str = "models"
 HELDOUT_RATIO: float = 0.10
 
 # --- Estimator (core/estimator.py) ---

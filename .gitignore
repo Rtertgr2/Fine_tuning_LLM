@@ -8,6 +8,9 @@ venv/
 # Project artifacts (สร้างระหว่างใช้งาน — ไม่ commit)
 exports/
 data_cache/
+# Asset ท้องถิ่นสำหรับ dropdown detect (ข้อมูลชิ้นใหญ่ — ไม่ commit)
+/datasets/
+/models/
 
 # Testing & tooling
 .pytest_cache/

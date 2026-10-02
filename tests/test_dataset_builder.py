@@ -142,3 +142,111 @@ def test_iter_codes_limits_and_column(monkeypatch):
         "streaming": True,
         "cache_dir": "data_cache",
     }
+
+
+# ---------------------------------------------------------------------------
+# Folder detection: dropdown datasets/ (design 2026-10-02 model-dataset-picker)
+# ---------------------------------------------------------------------------
+
+
+def test_list_datasets_returns_only_parquet_folders(tmp_path, monkeypatch):
+    from core import dataset_builder as db
+
+    root = tmp_path / "datasets"
+    (root / "alpha").mkdir(parents=True)
+    (root / "alpha" / "part.parquet").write_bytes(b"")
+    (root / "beta").mkdir()
+    (root / "beta" / "readme.txt").write_text("x", encoding="utf-8")
+    (root / "loose.parquet").write_bytes(b"")  # ไฟล์ลอย ๆ ไม่ใช่โฟลเดอร์ → ไม่นับ
+
+    monkeypatch.setattr(db, "DATASETS_DIR", str(root))
+    assert db.list_datasets() == ["alpha"]
+
+
+def test_list_datasets_missing_dir_is_empty(tmp_path, monkeypatch):
+    from core import dataset_builder as db
+
+    monkeypatch.setattr(db, "DATASETS_DIR", str(tmp_path / "not-there"))
+    assert db.list_datasets() == []
+
+
+# ---------------------------------------------------------------------------
+# iter_codes: อ่านโฟลเดอร์ .parquet ตรง ๆ — 20GB-safe ไม่ convert arrow ซ้ำ
+# ---------------------------------------------------------------------------
+
+
+def _write_parquet(path, values: list[str], column: str = "content"):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    pq.write_table(pa.table({column: values}), path)
+
+
+def test_iter_codes_reads_local_parquet_folder_sorted_multifile(tmp_path):
+    from core import dataset_builder as db
+
+    ds = tmp_path / "local-ds"
+    ds.mkdir()
+    _write_parquet(ds / "part-00001.parquet", ["b1", "b2"])
+    _write_parquet(ds / "part-00000.parquet", ["a1", "a2", "a3"])
+
+    codes = db.iter_codes(str(ds), "content", limit=4)
+    # อ่านเรียงตามชื่อไฟล์ (sorted) ภายในไฟล์เรียงตามแถว + เคารพ limit
+    assert codes == ["a1", "a2", "a3", "b1"]
+
+
+def test_iter_codes_resolves_bare_name_under_datasets_dir(tmp_path, monkeypatch):
+    from core import dataset_builder as db
+
+    root = tmp_path / "datasets"
+    (root / "alpha").mkdir(parents=True)
+    _write_parquet(root / "alpha" / "part.parquet", ["x", "y"])
+
+    monkeypatch.setattr(db, "DATASETS_DIR", str(root))
+    assert db.iter_codes("alpha", "content", limit=5) == ["x", "y"]
+
+
+def test_iter_codes_local_missing_column_gives_english_error(tmp_path):
+    from core import dataset_builder as db
+
+    ds = tmp_path / "local-ds"
+    ds.mkdir()
+    _write_parquet(ds / "part.parquet", ["x"], column="other_col")
+
+    try:
+        db.iter_codes(str(ds), "content", limit=5)
+    except ValueError as exc:
+        msg = str(exc)
+        assert "content" in msg and "other_col" in msg  # บอกทั้งคอลัมน์ที่ขอและที่มี
+        assert "local" in msg or "parquet" in msg
+    else:
+        raise AssertionError("โฟลเดอร์ไม่มีคอลัมน์ที่ขอ → ต้อง ValueError")
+
+
+def test_iter_codes_local_folder_without_parquet_gives_english_error(tmp_path):
+    from core import dataset_builder as db
+
+    ds = tmp_path / "empty-ds"
+    ds.mkdir()
+    (ds / "notes.txt").write_text("no data", encoding="utf-8")
+
+    try:
+        db.iter_codes(str(ds), "content", limit=5)
+    except ValueError as exc:
+        assert ".parquet" in str(exc)
+    else:
+        raise AssertionError("โฟลเดอร์ไม่มี parquet → ต้อง ValueError")
+
+
+def test_iter_codes_and_list_support_nested_parquet_layout(tmp_path, monkeypatch):
+    """layout `data/*.parquet` (คัดลอกมาจาก Hub repo ทั้งก้อน) ต้องใช้ได้"""
+    from core import dataset_builder as db
+
+    root = tmp_path / "datasets"
+    nested = root / "copied-ds" / "data"
+    nested.mkdir(parents=True)
+    _write_parquet(nested / "train-0.parquet", ["n1", "n2"])
+
+    monkeypatch.setattr(db, "DATASETS_DIR", str(root))
+    assert db.list_datasets() == ["copied-ds"]
+    assert db.iter_codes("copied-ds", "content", limit=5) == ["n1", "n2"]

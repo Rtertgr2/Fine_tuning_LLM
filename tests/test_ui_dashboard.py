@@ -280,3 +280,86 @@ def test_dashboard_wires_auto_render_event():
     cfg = demo.get_config_file()
     names = [d.get("api_name") for d in cfg.get("dependencies", [])]
     assert "on_eval_render" in names  # config เก็บชื่อไม่มี leading slash (view_api แสดง /)
+
+
+# ---------------------------------------------------------------------------
+# dropdown detect โฟลเดอร์ models/ + datasets/ (design 2026-10-02 picker)
+# ---------------------------------------------------------------------------
+
+
+def test_build_dashboard_model_and_dataset_are_dropdowns():
+    """ทั้ง Model และ Dataset ต้องเป็น Dropdown + allow_custom_value (พิมพ์เพิ่มได้)"""
+    from configs.safe_defaults import DEFAULT_DATASET_ID, DEFAULT_MODEL_ID
+
+    demo = build_dashboard(FakeController())
+    dropdowns = {
+        b.label: b for b in _iter_blocks(demo) if isinstance(b, gr.Dropdown)
+    }
+
+    model_dd = dropdowns["Model"]
+    dataset_dd = dropdowns["Dataset"]
+
+    def _labels(dd):  # gradio 6 normalize choices → (label, value) tuples
+        return [c[0] if isinstance(c, tuple) else c for c in dd.choices]
+
+    assert DEFAULT_MODEL_ID in _labels(model_dd)
+    assert DEFAULT_DATASET_ID in _labels(dataset_dd)
+    assert model_dd.allow_custom_value is True
+    assert dataset_dd.allow_custom_value is True
+
+
+def test_on_refresh_choices_lists_detected_assets(monkeypatch, tmp_path):
+    """สลับแท็บ → handler คืน choices ใหม่ที่มีโฟลเดอร์ models/ + datasets/ ที่ detect ได้"""
+    from configs.safe_defaults import DEFAULT_DATASET_ID, DEFAULT_MODEL_ID
+    from core import dataset_builder as db
+    from core import estimator as est
+    from ui.dashboard import _make_handlers
+
+    models_root = tmp_path / "models"
+    (models_root / "local-model").mkdir(parents=True)
+    (models_root / "local-model" / "config.json").write_text("{}", encoding="utf-8")
+    data_root = tmp_path / "datasets"
+    (data_root / "local-ds").mkdir(parents=True)
+    (data_root / "local-ds" / "part.parquet").write_bytes(b"")
+
+    monkeypatch.setattr(est, "MODELS_DIR", str(models_root))
+    monkeypatch.setattr(db, "DATASETS_DIR", str(data_root))
+
+    h = _make_handlers(FakeController())
+    model_upd, dataset_upd = h["on_refresh_choices"]()
+
+    assert DEFAULT_MODEL_ID in model_upd["choices"]
+    assert "local-model" in model_upd["choices"]
+    assert DEFAULT_DATASET_ID in dataset_upd["choices"]
+    assert "local-ds" in dataset_upd["choices"]
+
+
+def test_dashboard_wires_refresh_choices_on_tab1():
+    """tab1.select → on_refresh_choices ต้องถูก wire จริง (api_name ปรากฏใน config)"""
+    demo = build_dashboard(FakeController())
+    cfg = demo.get_config_file()
+    names = [d.get("api_name") for d in cfg.get("dependencies", [])]
+    assert "on_refresh_choices" in names
+
+
+def test_collect_config_resolves_local_model_name(monkeypatch, tmp_path):
+    """ชื่อโมเดลจาก dropdown (ใต้ models/) → config.model_id ต้องเป็น path ที่โหลดได้จริง
+
+    จุดเดียวที่ทุก flow (check/start/eval/merge/predict) ผ่าน → resolve ที่นี่ทีเดียว
+    """
+    from core import estimator as est
+    from ui.dashboard import _collect_config
+
+    models_root = tmp_path / "models"
+    (models_root / "alpha").mkdir(parents=True)
+    (models_root / "alpha" / "config.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(est, "MODELS_DIR", str(models_root))
+
+    args = list(_cfg_args())
+    args[0] = "alpha"
+    config, _params = _collect_config(*args)
+    assert config["model_id"] == str(models_root / "alpha")
+
+    # Hub id (ไม่ใช่โฟลเดอร์) → ไม่แตะ คงพฤติกรรมเดิม
+    config2, _ = _collect_config(*_cfg_args())
+    assert config2["model_id"] == "m/x"

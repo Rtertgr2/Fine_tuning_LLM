@@ -11,17 +11,20 @@ import hashlib
 import random
 from collections.abc import Iterable, Iterator
 from itertools import islice
+from pathlib import Path
 from typing import Any
 
-from datasets import load_dataset
+import pyarrow.parquet as pq
 
 from configs.safe_defaults import (
+    DATASETS_DIR,
     FIM_RATE,
     HELDOUT_RATIO,
     MAX_SEQ_LENGTH_DEFAULT,
     MIN_SAMPLE_LINES,
     SEED,
 )
+from datasets import load_dataset
 
 _HEX_MAX = 16**32
 
@@ -103,6 +106,59 @@ def filter_train_codes(codes: Iterable[str]) -> list[str]:
     return [code for code in codes if not is_heldout(code)]
 
 
+def list_datasets() -> list[str]:
+    """ชื่อโฟลเดอร์ใน `DATASETS_DIR` ที่มีไฟล์ `.parquet` อย่างน้อย 1 ไฟล์ — ตัวเลือก dropdown
+
+    โฟลเดอร์ที่ไม่มี parquet / ไฟล์ลอย ๆ ไม่นับ — path ที่ `iter_codes` รับคือ
+    ชื่อนี้ (resolve ใต้ `DATASETS_DIR`) หรือ path ตรง ๆ ก็ได้
+    """
+    root = Path(DATASETS_DIR)
+    if not root.is_dir():
+        return []
+    return sorted(
+        p.name for p in root.iterdir() if p.is_dir() and any(p.rglob("*.parquet"))
+    )
+
+
+def _resolve_local_dataset_dir(dataset_id: str) -> Path | None:
+    """หาโฟลเดอร์ dataset ท้องถิ่นจากค่า dropdown/path — ไม่พบ → None (ใช้ Hub)"""
+    direct = Path(dataset_id)
+    if direct.is_dir():
+        return direct
+    under_root = Path(DATASETS_DIR) / dataset_id
+    if under_root.is_dir():
+        return under_root
+    return None
+
+
+def _read_local_parquet(ds_dir: Path, column: str, limit: int) -> list[str]:
+    """อ่านคอลัมน์ `column` จาก `.parquet` ในโฟลเดอร์ ตรง ๆ ทีละ batch (row-group)
+
+    20GB-safe: ไม่ convert เป็น arrow cache ซ้ำ ไม่โหลดทั้งไฟล์ลง RAM
+    """
+    files = sorted(ds_dir.rglob("*.parquet"))
+    if not files:
+        raise ValueError(
+            f"Local dataset folder '{ds_dir}' has no .parquet file. "
+            "Put dataset .parquet file(s) in the folder, or pick a HF Hub dataset."
+        )
+    out: list[str] = []
+    for file in files:
+        pf = pq.ParquetFile(file)
+        available = pf.schema_arrow.names
+        if column not in available:
+            raise ValueError(
+                f"Column '{column}' not found in local parquet '{file.name}' "
+                f"(available: {', '.join(available)}). Fix the Dataset column."
+            )
+        for batch in pf.iter_batches(batch_size=64, columns=[column]):
+            for value in batch.column(0).to_pylist():
+                out.append(value)
+                if len(out) >= limit:
+                    return out
+    return out
+
+
 def iter_codes(
     dataset_id: str,
     column: str,
@@ -111,6 +167,13 @@ def iter_codes(
     split: str = "train",
     cache_dir: str = "data_cache",
 ) -> list[str]:
-    """อ่าน `limit` ตัวอย่างแรกจาก dataset แบบ streaming — ชุดเทรนย่อย (smoke, plan.md §4.4)"""
+    """อ่าน `limit` ตัวอย่างแรก — โฟลเดอร์ `.parquet` ท้องถิ่นอ่านตรง ๆ, Hub ใช้ streaming
+
+    `dataset_id` = path โฟลเดอร์ หรือชื่อใต้ `DATASETS_DIR` → อ่าน local;
+    ไม่พบโฟลเดอร์ → ถือเป็น Hub dataset id (พฤติกรรมเดิม, plan.md §4.4)
+    """
+    local = _resolve_local_dataset_dir(dataset_id)
+    if local is not None:
+        return _read_local_parquet(local, column, limit)
     ds = load_dataset(dataset_id, split=split, streaming=True, cache_dir=cache_dir)
     return [row[column] for row in islice(ds, limit)]

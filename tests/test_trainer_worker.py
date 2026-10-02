@@ -411,9 +411,21 @@ def test_run_training_filters_heldout_from_iter_codes(monkeypatch):
         return ["dummy text"]
 
     monkeypatch.setattr(wa, "build_samples", _fake_build_samples)
-    monkeypatch.setattr(
-        wa.AutoModelForCausalLM, "from_pretrained", lambda *a, **k: object()
+    # โมเดล fake มีเฉพาะ q_proj → LoraConfig ต้องได้เฉพาะตัวที่มีจริง (ไม่ใช่ทั้ง 7)
+    fake_model = SimpleNamespace(
+        named_modules=lambda: iter([("model.layers.0.attn.q_proj", None)])
     )
+    monkeypatch.setattr(
+        wa.AutoModelForCausalLM, "from_pretrained", lambda *a, **k: fake_model
+    )
+    lora_targets: list = []
+    _real_lora_config = wa.LoraConfig
+
+    def _recording_lora_config(**kw):
+        lora_targets.append(kw.get("target_modules"))
+        return _real_lora_config(**kw)
+
+    monkeypatch.setattr(wa, "LoraConfig", _recording_lora_config)
     monkeypatch.setattr(wa, "AtomicSaveTrainer", _Trainer)
 
     cfg = {
@@ -434,3 +446,33 @@ def test_run_training_filters_heldout_from_iter_codes(monkeypatch):
     assert recorded == [[train_code]]
     assert q.messages[-1] == {"type": "status", "state": "finished"}
     assert all(m.get("type") != "error" for m in q.messages)
+    # wiring: LoraConfig ได้เฉพาะ target ที่มีในโมเดลจริง (q_proj เท่านั้น ไม่ใช่ทั้ง 7)
+    assert lora_targets == [["q_proj"]]
+
+
+# ---------------------------------------------------------------------------
+# LoRA targets: filter ตามโมเดลจริง (ข้าม family — design 2026-10-02 picker)
+# ---------------------------------------------------------------------------
+
+
+def test_available_lora_targets_filters_to_model_modules():
+    model = SimpleNamespace(
+        named_modules=lambda: iter(
+            [
+                ("model", None),
+                ("model.layers.0.attn.q_proj", None),
+                ("model.layers.0.attn.o_proj", None),
+                ("model.layers.0.mlp.gate_up_proj", None),
+            ]
+        )
+    )
+    # ได้เฉพาะตัวที่มีจริง + เรียงตามลำดับ LORA_TARGET_MODULES (gate_up ไม่ตรงชื่อ)
+    assert wa.available_lora_targets(model) == ["q_proj", "o_proj"]
+
+
+def test_available_lora_targets_none_match_gives_english_error():
+    model = SimpleNamespace(named_modules=lambda: iter([("model.layers.0.qkv", None)]))
+    with pytest.raises(ValueError) as exc:
+        wa.available_lora_targets(model)
+    assert "LoRA" in str(exc.value)
+    assert "not found" in str(exc.value)

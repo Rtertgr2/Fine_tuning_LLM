@@ -111,3 +111,84 @@ def test_estimate_components_sum():
         result.weights_gb + result.trainable_gb + result.activations_gb + result.overhead_gb
     )
     assert parts == pytest.approx(result.total_required_gb)
+
+
+# ---------------------------------------------------------------------------
+# Folder detection: dropdown models/ (design 2026-10-02 model-dataset-picker)
+# ---------------------------------------------------------------------------
+
+
+def test_list_models_returns_only_config_folders(tmp_path, monkeypatch):
+    from core import estimator as est
+
+    root = tmp_path / "models"
+    (root / "good-model").mkdir(parents=True)
+    (root / "good-model" / "config.json").write_text("{}", encoding="utf-8")
+    (root / "half-model").mkdir()
+    (root / "half-model" / "weights.safetensors").write_bytes(b"")
+
+    monkeypatch.setattr(est, "MODELS_DIR", str(root))
+    assert est.list_models() == ["good-model"]
+
+
+def test_list_models_missing_dir_is_empty(tmp_path, monkeypatch):
+    from core import estimator as est
+
+    monkeypatch.setattr(est, "MODELS_DIR", str(tmp_path / "not-there"))
+    assert est.list_models() == []
+
+
+# ---------------------------------------------------------------------------
+# resolve_model_spec: โมเดลท้องถิ่น (design 2026-10-02 model-dataset-picker)
+# ---------------------------------------------------------------------------
+
+
+def _write_local_config(model_dir, *, hidden=1024, layers=12, inter=4096, vocab=32000):
+    model_dir.mkdir(parents=True)
+    (model_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "hidden_size": hidden,
+                "num_hidden_layers": layers,
+                "intermediate_size": inter,
+                "vocab_size": vocab,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_resolve_model_spec_reads_local_config(tmp_path):
+    model_dir = tmp_path / "my-model"
+    _write_local_config(model_dir)
+
+    spec = est.resolve_model_spec(str(model_dir), None)
+
+    assert spec.source == "local_config"
+    assert spec.hidden_size == 1024
+    assert spec.num_layers == 12
+    expected = 12 * (4 * 1024 * 1024 + 3 * 1024 * 4096) + 32000 * 1024
+    assert spec.num_params == expected
+
+
+def test_resolve_model_spec_bare_name_under_models_dir(tmp_path, monkeypatch):
+    root = tmp_path / "models"
+    _write_local_config(root / "alpha", hidden=768, layers=6, inter=3072, vocab=20000)
+
+    monkeypatch.setattr(est, "MODELS_DIR", str(root))
+    spec = est.resolve_model_spec("alpha", None)
+
+    assert spec.source == "local_config"
+    assert spec.hidden_size == 768
+    assert spec.num_layers == 6
+
+
+def test_resolve_model_spec_broken_local_config_uses_user_fallback(tmp_path):
+    model_dir = tmp_path / "broken-model"
+    model_dir.mkdir()
+    (model_dir / "config.json").write_text("{ not json", encoding="utf-8")
+
+    spec = est.resolve_model_spec(str(model_dir), 1.5)
+
+    assert spec.source == "user_fallback"
+    assert spec.num_params == 1_500_000_000

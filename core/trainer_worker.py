@@ -41,6 +41,21 @@ from core.dataset_builder import build_samples, filter_train_codes, iter_codes
 from core.ipc_bridge import error_msg, log_msg, metric_msg, status_msg
 
 
+def available_lora_targets(model) -> list[str]:
+    """LORA_TARGET_MODULES ที่มีอยู่จริงในโมเดล — รองรับ family ใหม่ที่ชื่อเลเยอร์ต่างกัน
+
+    ไม่ตรงสักตัว → ValueError (English) บอกให้ตรวจความเข้ากันได้ของ family
+    """
+    module_names = {name.rsplit(".", 1)[-1] for name, _ in model.named_modules()}
+    found = [target for target in LORA_TARGET_MODULES if target in module_names]
+    if not found:
+        raise ValueError(
+            f"LoRA target modules {list(LORA_TARGET_MODULES)} not found in model — "
+            "this model family is incompatible; check its layer names."
+        )
+    return found
+
+
 def build_training_args(
     output_dir: str,
     *,
@@ -301,7 +316,7 @@ def run_training(config: dict, queue_) -> None:
             r=config["lora_rank"],
             lora_alpha=config["lora_rank"] * 2,
             lora_dropout=0.0,
-            target_modules=list(LORA_TARGET_MODULES),
+            target_modules=available_lora_targets(model),
             task_type="CAUSAL_LM",
         )
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import math
+from pathlib import Path
 from typing import NamedTuple
 
 from huggingface_hub import hf_hub_download
@@ -30,6 +31,7 @@ from configs.safe_defaults import (
     ESTIMATOR_FALLBACK_NUM_LAYERS,
     ESTIMATOR_OVERHEAD_GB,
     MAX_SEQ_LENGTH_DEFAULT,
+    MODELS_DIR,
     RAM_MIN_GB,
     VRAM_SAFE_RATIO,
     VRAM_WARNING_RATIO,
@@ -74,8 +76,44 @@ _VERDICT_REASONS = {
 }
 
 
+def list_models() -> list[str]:
+    """ชื่อโฟลเดอร์ใน `MODELS_DIR` ที่มี `config.json` — ตัวเลือก dropdown
+
+    path ที่ `resolve_model_spec`/trainer รับคือชื่อนี้ (resolve ใต้ `MODELS_DIR`)
+    หรือ path ตรง ๆ ก็ได้
+    """
+    root = Path(MODELS_DIR)
+    if not root.is_dir():
+        return []
+    return sorted(
+        p.name for p in root.iterdir() if p.is_dir() and (p / "config.json").exists()
+    )
+
+
+def resolve_local_model(model_id: str) -> Path | None:
+    """หาโฟลเดอร์โมเดลท้องถิ่นจากค่า dropdown/path — ไม่พบ → None (ใช้ Hub)"""
+    direct = Path(model_id)
+    if direct.is_dir():
+        return direct
+    under_root = Path(MODELS_DIR) / model_id
+    if under_root.is_dir():
+        return under_root
+    return None
+
+
+def _spec_from_config(cfg: dict, source: str) -> ModelSpec:
+    """ModelSpec จาก config.json (ท้องถิ่น/Hub ใช้สูตรเดียวกัน)"""
+    d = int(cfg["hidden_size"])
+    n = int(cfg["num_hidden_layers"])
+    inter = int(cfg["intermediate_size"])
+    vocab = int(cfg["vocab_size"])
+    # สมมติ MHA (4d²) — กว่าจริงเล็กน้อยสำหรับ GQA = ทิศทางปลอดภัย
+    num_params = n * (4 * d * d + 3 * d * inter) + vocab * d
+    return ModelSpec(num_params, d, n, source)
+
+
 def resolve_model_spec(model_id: str, user_params_b: float | None) -> ModelSpec:
-    """หา P/d/N ของโมเดล: default hardcode → config.json จาก Hub → user fallback"""
+    """หา P/d/N ของโมเดล: default hardcode → config.json ท้องถิ่น/Hub → user fallback"""
     if model_id == DEFAULT_MODEL_ID:
         return ModelSpec(
             DEFAULT_MODEL_NUM_PARAMS,
@@ -83,31 +121,26 @@ def resolve_model_spec(model_id: str, user_params_b: float | None) -> ModelSpec:
             DEFAULT_MODEL_NUM_LAYERS,
             "default",
         )
+    local = resolve_local_model(model_id)
     try:
+        if local is not None:
+            with open(local / "config.json", encoding="utf-8") as f:
+                return _spec_from_config(json.load(f), "local_config")
         path = hf_hub_download(model_id, "config.json")
         with open(path, encoding="utf-8") as f:
-            cfg = json.load(f)
-        d = int(cfg["hidden_size"])
-        n = int(cfg["num_hidden_layers"])
-        inter = int(cfg["intermediate_size"])
-        vocab = int(cfg["vocab_size"])
-        # สมมติ MHA (4d²) — กว่าจริงเล็กน้อยสำหรับ GQA = ทิศทางปลอดภัย
-        num_params = n * (4 * d * d + 3 * d * inter) + vocab * d
-        return ModelSpec(num_params, d, n, "hf_config")
-    except Exception:  # เงื่อนไขสเปก "ออฟไลน์ / โหลดไม่ได้" = อะไรก็ตามที่ขวาง
-        # P ที่ใช้ไม่ได้ (ไม่กรอก / 0 / ลบ / NaN / inf) = ยังไม่ทราบที่เชื่อถือได้ → ห้ามเดา
-        if (
-            user_params_b is None
-            or not math.isfinite(user_params_b)
-            or user_params_b <= 0
-        ):
-            raise ModelSpecUnavailable(model_id) from None
-        return ModelSpec(
-            int(user_params_b * 1e9),
-            ESTIMATOR_FALLBACK_HIDDEN_SIZE,
-            ESTIMATOR_FALLBACK_NUM_LAYERS,
-            "user_fallback",
-        )
+            return _spec_from_config(json.load(f), "hf_config")
+    except Exception:  # noqa: BLE001, S110 — config เสีย/ออฟไลน์ → fallback ด้านล่าง (ห้ามเดา)
+        pass
+
+    # P ที่ใช้ไม่ได้ (ไม่กรอก / 0 / ลบ / NaN / inf) = ยังไม่ทราบที่เชื่อถือได้ → ห้ามเดา
+    if user_params_b is None or not math.isfinite(user_params_b) or user_params_b <= 0:
+        raise ModelSpecUnavailable(model_id) from None
+    return ModelSpec(
+        int(user_params_b * 1e9),
+        ESTIMATOR_FALLBACK_HIDDEN_SIZE,
+        ESTIMATOR_FALLBACK_NUM_LAYERS,
+        "user_fallback",
+    )
 
 
 def classify(total_required_gb: float, free_vram_gb: float) -> str:

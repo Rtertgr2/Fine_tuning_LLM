@@ -22,6 +22,8 @@ from configs.safe_defaults import (
     TRAIN_CODE_LIMIT,
 )
 from core import evaluator as ev
+from core.dataset_builder import list_datasets
+from core.estimator import list_models, resolve_local_model
 from core.trainer_worker import merge_export, save_adapter_only
 from ui.components import build_metric_plot, verdict_style
 from ui.controller import run_predict
@@ -57,8 +59,10 @@ def _collect_config(
     output_dir,
 ) -> tuple[dict, float | None]:
     """Widget values → run_training config (9 keys) + user_params_b (estimator fallback ไม่ใช่ config)"""
+    # dropdown คืนชื่อใต้ models/ → resolve เป็น path ที่ from_pretrained โหลดได้ (Hub id ไม่แตะ)
+    local_model = resolve_local_model(model_id)
     config = {
-        "model_id": model_id,
+        "model_id": str(local_model) if local_model else model_id,
         "dataset_id": dataset_id,
         "dataset_column": dataset_column,
         "fim_registry_key": fim_key,
@@ -214,6 +218,16 @@ def _make_handlers(controller) -> dict:
         except Exception as exc:  # noqa: BLE001
             return f'<span style="color:#dc2626">**Merge failed:** {exc}</span>'
 
+    def on_refresh_choices():
+        """สลับมาแท็บ Configuration → detect โฟลเดอร์ models/ + datasets/ ใหม่
+
+        dropdown ทั้งคู่: hub default + โฟลเดอร์ท้องถิ่นที่มีอยู่ ณ ตอนนั้น
+        """
+        return (
+            gr.update(choices=[DEFAULT_MODEL_ID, *list_models()]),
+            gr.update(choices=[DEFAULT_DATASET_ID, *list_datasets()]),
+        )
+
     return {
         "on_check": on_check,
         "on_start": on_start,
@@ -224,6 +238,7 @@ def _make_handlers(controller) -> dict:
         "on_eval_render": on_eval_render,
         "on_save_adapter": on_save_adapter,
         "on_merge": on_merge,
+        "on_refresh_choices": on_refresh_choices,
     }
 
 
@@ -239,10 +254,10 @@ def build_dashboard(controller) -> gr.Blocks:
             # ---------------------------------------------------------- #
             # Tab 1: Configuration & Pre-flight (9 ฟิลด์ + params fallback)
             # ---------------------------------------------------------- #
-            with gr.Tab("Configuration & Pre-flight"):
+            with gr.Tab("Configuration & Pre-flight") as tab1:
                 with gr.Row():
                     model_in = gr.Dropdown(
-                        choices=[DEFAULT_MODEL_ID],
+                        choices=[DEFAULT_MODEL_ID, *list_models()],
                         value=DEFAULT_MODEL_ID,
                         allow_custom_value=True,
                         label="Model",
@@ -252,7 +267,12 @@ def build_dashboard(controller) -> gr.Blocks:
                         label="Parameters (B) — fallback when config fetch fails",
                     )
                 with gr.Row():
-                    dataset_in = gr.Textbox(value=DEFAULT_DATASET_ID, label="Dataset ID")
+                    dataset_in = gr.Dropdown(
+                        choices=[DEFAULT_DATASET_ID, *list_datasets()],
+                        value=DEFAULT_DATASET_ID,
+                        allow_custom_value=True,
+                        label="Dataset",
+                    )
                     column_in = gr.Textbox(
                         value=DEFAULT_DATASET_COLUMN, label="Code column"
                     )
@@ -338,6 +358,8 @@ def build_dashboard(controller) -> gr.Blocks:
             model_in, params_in, dataset_in, column_in, fim_in,
             lora_in, seq_in, steps_in, code_limit_in, output_in,
         ]
+        # detect โฟลเดอร์ใหม่ทุกครั้งที่สลับมาแท็บนี้ (dropdown ทั้งคู่)
+        tab1.select(h["on_refresh_choices"], outputs=[model_in, dataset_in])
 
         check_btn.click(
             h["on_check"], inputs=cfg_inputs,
