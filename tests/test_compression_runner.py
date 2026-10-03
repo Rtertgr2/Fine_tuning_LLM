@@ -236,3 +236,23 @@ def test_server_lifecycle_real():
         llama_runner.stop_server(handle)
 
     assert handle.proc.poll() is not None  # ปิดจริง ไม่ leak
+
+
+def test_start_server_keyboard_interrupt_stops_child(monkeypatch):
+    """Review Focus #3: Ctrl+C ระหว่างรอ health — ห้าม leak child (ต้อง stop ก่อน propagate)"""
+
+    def fake_popen(cmd, **kwargs):
+        return FakeProc(rc=None)
+
+    def interrupting_get(url, **kwargs):
+        raise KeyboardInterrupt
+
+    stopped: list = []
+    monkeypatch.setattr(llama_runner.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(llama_runner, "_http_get", interrupting_get)
+    monkeypatch.setattr(llama_runner, "stop_server", lambda h, **k: stopped.append(h))
+
+    with pytest.raises(KeyboardInterrupt):
+        llama_runner.start_server(Path("/tmp/m.gguf"), port=18085)
+
+    assert len(stopped) == 1  # cleanup ก่อน propagate

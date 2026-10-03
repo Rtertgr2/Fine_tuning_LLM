@@ -122,38 +122,42 @@ def start_server(
         handle._reader.start()
 
     deadline = time.monotonic() + timeout
-    ready = False
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
+    try:
+        ready = False
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                raise CompressionError(
+                    f"llama-server failed to start: {_log_tail(handle.log_text)}. "
+                    "Try --port or --device cpu."
+                )
+            status, _ = _http_get(f"{handle.url}/health", timeout=2.0)
+            if status == 200:
+                ready = True
+                break
+            time.sleep(0.15)
+        if not ready:
+            stop_server(handle)
             raise CompressionError(
-                f"llama-server failed to start: {_log_tail(handle.log_text)}. "
-                "Try --port or --device cpu."
+                f"llama-server did not become ready in {timeout}s: "
+                f"{_log_tail(handle.log_text)}"
             )
-        status, _ = _http_get(f"{handle.url}/health", timeout=2.0)
-        if status == 200:
-            ready = True
-            break
-        time.sleep(0.15)
-    if not ready:
-        stop_server(handle)
-        raise CompressionError(
-            f"llama-server did not become ready in {timeout}s: "
-            f"{_log_tail(handle.log_text)}"
-        )
 
-    status, body = _http_get(f"{handle.url}/props", timeout=5.0)
-    served_alias = None
-    if status == 200 and body:
-        try:
-            served_alias = json.loads(body).get("model_alias")
-        except json.JSONDecodeError:
-            served_alias = None
-    if served_alias != alias:
-        stop_server(handle)
-        raise CompressionError(
-            f"port {port} is serving a different model (expected {alias}). "
-            "Try another --port."
-        )
+        status, body = _http_get(f"{handle.url}/props", timeout=5.0)
+        served_alias = None
+        if status == 200 and body:
+            try:
+                served_alias = json.loads(body).get("model_alias")
+            except json.JSONDecodeError:
+                served_alias = None
+        if served_alias != alias:
+            stop_server(handle)
+            raise CompressionError(
+                f"port {port} is serving a different model (expected {alias}). "
+                "Try another --port."
+            )
+    except KeyboardInterrupt:
+        stop_server(handle)  # Review Focus #3: Ctrl+C ระหว่าง start — ห้าม leak child
+        raise
     return handle
 
 
