@@ -13,6 +13,9 @@ import json
 import sys
 from pathlib import Path
 
+# รันเป็น `python scripts/benchmark_compression.py` → sys.path[0] = scripts/ ต้องเพิ่ม root ก่อน
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from configs.safe_defaults import (
     DEFAULT_DATASET_COLUMN,
     DEFAULT_DATASET_ID,
