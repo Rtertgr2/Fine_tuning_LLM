@@ -57,8 +57,13 @@ def _log_tail(text: str, n: int = 15) -> str:
 
 
 def _drain(stream, log: list[str]) -> None:
-    """อ่าน stdout ต่อเนื่องกัน (กัน pipe buffer เต็ม = server แขวน)"""
-    log.extend(stream)
+    """อ่าน stdout ต่อเนื่องกัน (กัน pipe buffer เต็ม = server แขวน)
+
+    stream เป็น binary — byte ที่ไม่ใช่ UTF-8 (เช่น log จาก Vulkan driver) ใช้
+    `errors="replace"` ไม่ให้ thread ตายกลางทาง (thread ตาย = pipe ไม่มีคนอ่าน)
+    """
+    for raw in iter(stream.readline, b""):
+        log.append(raw.decode("utf-8", errors="replace"))
 
 
 @dataclass
@@ -111,9 +116,7 @@ def start_server(
         "-v",
     ]
     cmd += device_args(device)
-    proc = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-    )
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     handle = ServerHandle(proc=proc, url=f"http://127.0.0.1:{port}", alias=alias)
     if proc.stdout is not None:
         handle._reader = threading.Thread(

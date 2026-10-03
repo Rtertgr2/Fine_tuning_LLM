@@ -68,7 +68,12 @@ def _xpu_smi_output() -> str | None:
         return None
     try:
         proc = subprocess.run(
-            [exe, "-t"], capture_output=True, text=True, timeout=5, check=False
+            [exe, "-t"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=5,
+            check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -100,7 +105,13 @@ def run_bench(gguf: Path, *, device: str = "vulkan") -> dict:
     """
     cmd = [str(tool_path("llama-bench")), "-m", str(gguf), "-o", "json"]
     cmd += device_args(device)
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        errors="replace",
+    )
 
     peak: dict = {"peak_rss_mb": None, "peak_vram_mb": None}
     while (rc := proc.poll()) is None:

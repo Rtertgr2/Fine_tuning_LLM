@@ -256,3 +256,21 @@ def test_start_server_keyboard_interrupt_stops_child(monkeypatch):
         llama_runner.start_server(Path("/tmp/m.gguf"), port=18085)
 
     assert len(stopped) == 1  # cleanup ก่อน propagate
+
+
+def test_drain_decodes_bytes_leniently_without_dying():
+    """Vulkan driver log มี byte ไม่ใช่ UTF-8 — drain ต้องแทนด้วย � ไม่ใช่ตายกลางทาง
+
+    thread ตาย = ไม่มีคนอ่าน pipe → buffer เต็ม → server แขวน (บั๊กเจอจาก run จริง)
+    """
+    import io
+
+    stream = io.BytesIO(b"ok line\n\xff\xfe garbage\nlast line\n")
+    log: list[str] = []
+
+    llama_runner._drain(stream, log)
+
+    assert log[0] == "ok line\n"
+    assert log[-1] == "last line\n"  # อ่านจนจบ ไม่หลุดกลางทาง
+    assert len(log) == 3
+    assert "garbage" in log[1]
