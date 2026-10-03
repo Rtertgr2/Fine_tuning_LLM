@@ -2,7 +2,7 @@
 
 - **วันที่:** 2026-10-03
 - **Status:** Approved (design sections §1–§3 อนุมัติ in-chat แล้ว)
-- **อ้างอิง:** `2026-10-03-phase6-llm-optimization-roadmap.md` (§4 benchmark schema, §6.1–6.5, §6.9 CLI, §7 test strategy, §8 safety)
+- **อ้างอิง:** `docs/roadmaps/2026-10-03-phase6-llm-optimization-roadmap.md` (§4 benchmark schema, §6.1–6.5, §6.9 CLI, §7 test strategy, §8 safety)
 - **Scope:** Sub-project แรกสุดของ LLM Optimization Lab (roadmap "Main Track" ข้อ 1–3)
 
 ---
