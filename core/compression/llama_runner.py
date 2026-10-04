@@ -25,7 +25,9 @@ from core.compression.config import device_args, require_tools, tool_path
 _KV_RE = re.compile(r"llama_kv_cache:\s+size\s*=\s*([\d.]+)\s*MiB")
 
 # บรรทัด log สูงสุดที่เก็บในหน่วยความจำ — serve เปิดค้างได้ไม่จำกัด → ห้ามโตไม่จำกัด (Review #11)
-LOG_MAX_LINES = 20_000
+# แต่ต้องมากพอ: eval 100 เคส ด้วย -v ≈ 22k บรรทัด (startup ~900 + ~210/เคส) — น้อยกว่านี้
+# บรรทัด kv_cache ตอน startup ถูกไล่ออกก่อนถึง parse → report kv = None (regression จริงที่เจอ)
+LOG_MAX_LINES = 100_000
 
 
 def find_free_port() -> int:

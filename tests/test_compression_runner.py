@@ -396,3 +396,21 @@ def test_start_server_omits_context_by_default(monkeypatch):
     llama_runner.start_server(Path("/tmp/m-q4_k_m.gguf"))
 
     assert "-c" not in captured_cmd[0]
+
+
+def test_startup_kv_line_survives_eval_log_volume():
+    """#11 regression: eval 100 เคส ด้วย -v ≈ 22k บรรทัด — startup kv ต้องไม่ถูก deque ไล่ออก
+
+    วัดจริง: startup ≈ 900 บรรทัด (kv line ที่ ~300) + ~210 บรรทัด/เคส × 100 เคส
+    → maxlen เดิม 20,000 ไล่ kv line ทิ้งระหว่างเคสท้าย ๆ → report kv = None (ผิด)
+    """
+    handle = ServerHandle(
+        proc=FakeProc(rc=0), url="http://127.0.0.1:9", alias="x"
+    )
+    handle._log.append(
+        "0.00.348.225 I llama_kv_cache: size =   15.00 MiB (  1280 cells,  24 layers)\n"
+    )  # บรรทัด startup (มาก่อน eval)
+    for i in range(25_000):  # volume จริง eval 100 เคส ( tensor-graph spam )
+        handle._log.append(f"0.01.{i % 100:03d} D llama_graph_n_input_tensors: t{i}\n")
+
+    assert llama_runner.kv_cache_mb(handle.log_text) == 15.0

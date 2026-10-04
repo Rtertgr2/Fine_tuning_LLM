@@ -371,10 +371,11 @@ def test_delta_shown_when_case_count_matches(monkeypatch, tmp_path):
 
 
 def test_start_server_receives_context_arg(monkeypatch, tmp_path):
-    """Review #7: CLI ต้องส่ง ctx ให้ server = ค่าที่รายงาน (input budget + gen headroom)
+    """Review #7: CLI ต้องส่ง ctx ให้ server = ค่าที่รายงาน (input budget + gen headroom + margin)
 
-    headroom = EVAL_MAX_NEW_TOKENS — worst case จริง 100 เคส: prompt 2051 + middle 246
-    = 2297 ≤ 2304 → ทุกเคส fit เท่า HF baseline (วัดจริง 2026-10-04)
+    headroom = EVAL_MAX_NEW_TOKENS + FIM_PROMPT_MARGIN — default args.context=1024
+    (MAX_SEQ_LENGTH_DEFAULT): prompt ≤ ~1027 (budget+FIM specials) + middle ≤ 256
+    → theoretical worst 1286 ≤ 1296 ทุกเคส fit เท่า HF baseline
     """
     cli = _load_cli()
     calls: list[str] = []
@@ -393,7 +394,7 @@ def test_start_server_receives_context_arg(monkeypatch, tmp_path):
     args = cli.build_parser().parse_args(["--model", "m", "--variants", "fp16"])
     cli.run_benchmark(args)
 
-    expected_ctx = args.context + EVAL_MAX_NEW_TOKENS
+    expected_ctx = args.context + EVAL_MAX_NEW_TOKENS + cli.FIM_PROMPT_MARGIN
     assert captured_kwargs.get("ctx_size") == expected_ctx
     assert reports[0]["context_tokens"] == expected_ctx  # reported = applied
 

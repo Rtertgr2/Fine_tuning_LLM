@@ -144,10 +144,14 @@ bash scripts/setup_llamacpp.sh
 # → Server ready: http://127.0.0.1:8080 (model: Qwen2.5-Coder-0.5B-q4_k_m)
 ```
 
-- **Artifacts**: `<source>/gguf/<name>-<variant>.gguf` — มีอยู่แล้ว reuse ข้ามรอบ (ไม่แปลงซ้ำ)
-- **Reports**: `benchmarks/<model>/<variant>.json` — schema §4 ของ roadmap + ตารางสรุปพิมพ์ใน terminal
+- **Artifacts**: `<source>/gguf/<name>-<variant>.gguf` — reuse ข้ามรอบเมื่อ **source ไม่เปลี่ยน**
+  (มี sidecar fingerprint `*.srcmeta.json` = size+mtime ของไฟล์ต้นทาง — source เปลี่ยน/ไฟล์ขาด → แปลงใหม่เอง;
+  เขียนแบบ atomic `.partial` → ไฟล์จริง — fail/Ctrl+C ไม่ทิ้งเศษให้ reuse)
+- **Reports**: `benchmarks/<model>-<hash>/<variant>.json` — schema §4 ของ roadmap + ตารางสรุปพิมพ์ใน terminal
+  (hash ของ path เต็ม — source คนละที่ชื่อ basename เดียวกันไม่เขียนทับกัน)
 - **Baseline**: โมเดล base → `data_cache/eval/base.json`, source ใต้ `exports/` (merge LoRA) → `finetuned.json`
-  — ตารางพิมพ์ delta (`+x.xx`) ใต้ตัวเลข EM/F1 เทียบ Phase 5
+  — ตารางพิมพ์ delta (`+x.xx`) ใต้ตัวเลข EM/F1 เทียบ Phase 5 **เมื่อจำนวนเคสตรงกัน**
+  (คนละจำนวน = คนละการทดสอบ → ข้าม delta พร้อม note ใน stderr)
 - **Honest null**: วัดไม่ได้เป็น `null` ไม่ใช่ 0 — `peak_vram_mb` (เครื่องนี้ไม่มี `xpu-smi`),
   `load_time_ms` (llama-bench รุ่น pin ไม่ emit ค่านี้), `syntax_pass_rate`/`execution_pass_rate`
   (ยังไม่มี sandbox phase — เป็น `null` เสมอ)

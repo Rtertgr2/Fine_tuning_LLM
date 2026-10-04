@@ -44,6 +44,10 @@ from core.estimator import ModelSpecUnavailable, resolve_model_spec
 from core.evaluator import EVAL_MAX_NEW_TOKENS, build_eval_cases
 from core.trainer_worker import AutoTokenizer
 
+# กันชน token พิเศษของ FIM prompt ที่อยู่เหนือ input budget (วัดจริง ≤6 โทเคน) —
+# server ctx ต้องครอบคลุม theoretical worst (budget + specials + EVAL_MAX_NEW_TOKENS) เสมอ
+FIM_PROMPT_MARGIN: int = 16
+
 
 def parse_variants(raw: str) -> tuple[str, ...]:
     return tuple(v.strip() for v in raw.split(",") if v.strip())
@@ -141,10 +145,11 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
     source = resolve_source(args.model)
     require_tools()
     parameter_count = _parameter_count(args.model)
-    # Review #7: server ต้องรันด้วย context ที่รายงาน = input budget (args.context —
-    # ตรงกับที่ build_eval_cases truncate) + gen headroom เท่า HF eval
-    # (EVAL_MAX_NEW_TOKENS) → worst case จริง 100 เคส fit ทั้งหมด (measure 2026-10-04)
-    server_ctx = args.context + EVAL_MAX_NEW_TOKENS
+    # Review #7: server ต้องรันด้วย context ที่รายงาน = input budget (args.context =
+    # MAX_SEQ_LENGTH_DEFAULT ที่ build_eval_cases ใช้ truncate) + gen headroom เท่า HF eval
+    # (EVAL_MAX_NEW_TOKENS) + margin กันชน FIM specials (prompt เหนือ budget วัดจริง ≤6 โทเคน;
+    # theoretical worst 1024+6+256 = 1286 ต้อง ≤ ค่านี้) → ทุกเคส fit เท่า baseline
+    server_ctx = args.context + EVAL_MAX_NEW_TOKENS + FIM_PROMPT_MARGIN
 
     tokenizer = None
     fim_tokens = None
