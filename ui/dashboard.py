@@ -35,6 +35,7 @@ _STATUS_COLORS = {
     "starting": "#ca8a04",
     "training": "#ca8a04",
     "saving": "#ca8a04",
+    "aborting": "#ca8a04",  # M4: ระหว่าง kill — สีเดียวกับ banner "Aborting…"
     "finished": "#16a34a",
     "aborted": "#dc2626",
 }

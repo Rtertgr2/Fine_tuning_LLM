@@ -74,8 +74,8 @@ def watchdog_error(process, last_status: str | None) -> dict | None:
     """
     if process.is_alive():
         return None
-    if last_status in TERMINAL_STATUSES:
-        return None
+    if last_status in TERMINAL_STATUSES or last_status == "aborting":
+        return None  # "aborting" = kill ที่ตั้งใจอยู่ (M4) — ตายตรงนี้ไม่ใช่ zombie
     return error_msg(
         "Training process died without sending finished/aborted (zombie)",
         f"last_status={last_status!r}",
