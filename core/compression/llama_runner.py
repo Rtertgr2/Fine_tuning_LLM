@@ -25,8 +25,8 @@ from core.compression.config import device_args, require_tools, tool_path
 _KV_RE = re.compile(r"llama_kv_cache:\s+size\s*=\s*([\d.]+)\s*MiB")
 
 # บรรทัด log สูงสุดที่เก็บในหน่วยความจำ — serve เปิดค้างได้ไม่จำกัด → ห้ามโตไม่จำกัด (Review #11)
-# แต่ต้องมากพอ: eval 100 เคส ด้วย -v ≈ 22k บรรทัด (startup ~900 + ~210/เคส) — น้อยกว่านี้
-# บรรทัด kv_cache ตอน startup ถูกไล่ออกก่อนถึง parse → report kv = None (regression จริงที่เจอ)
+# วัดจริง: startup ≈ 3,675 + eval spam ≈ 3,156/เคส × 100 เคส ≈ 319k — เก็บไม่ไหวแน่นอน
+# → report kv parse แบบ eager ตอน start (ไม่พึ่ง deque); bound นี้ครอบคลุม startup + error tail
 LOG_MAX_LINES = 100_000
 
 

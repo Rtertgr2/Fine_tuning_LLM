@@ -399,10 +399,11 @@ def test_start_server_omits_context_by_default(monkeypatch):
 
 
 def test_startup_kv_line_survives_eval_log_volume():
-    """#11 regression: eval 100 เคส ด้วย -v ≈ 22k บรรทัด — startup kv ต้องไม่ถูก deque ไล่ออก
+    """#11: deque เก็บ startup log ได้เยอะ (แต่ volume จริงใหญ่กว่า → kv ต้อง eager ดู orchestration test)
 
-    วัดจริง: startup ≈ 900 บรรทัด (kv line ที่ ~300) + ~210 บรรทัด/เคส × 100 เคส
-    → maxlen เดิม 20,000 ไล่ kv line ทิ้งระหว่างเคสท้าย ๆ → report kv = None (ผิด)
+    วัดจริง: startup ≈ 3,675 บรรทัด + ~3,156 บรรทัด/เคส (tensor-graph spam) × 100 เคส
+    ≈ 319k บรรทัด ≫ LOG_MAX_LINES — พิสูจน์ว่า parse kv หลัง eval = evict ชัวร์;
+    deque bound (100k) ยังต้องครอบคลุม startup + error tail ของ serve (Review #11)
     """
     handle = ServerHandle(
         proc=FakeProc(rc=0), url="http://127.0.0.1:9", alias="x"

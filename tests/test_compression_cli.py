@@ -131,9 +131,9 @@ def test_run_benchmark_orchestration_order(monkeypatch, tmp_path):
         "artifact",
         "bench",
         "server.start",
+        "kv",  # eager: parse ก่อน eval — volume จริง 100 เคส ≈ 319k บรรทัด > LOG_MAX_LINES
         "eval",
         "server.stop",
-        "kv",  # Review #6: parse หลัง stop+join เท่านั้น
         "report",
     ]
     assert calls == per_variant * 2

@@ -190,13 +190,15 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
         eval_result = None
         if not args.no_eval:
             handle = start_server(gguf, device=args.device, ctx_size=server_ctx)
+            # eager parse ก่อน eval — วัดจริง eval 100 เคส ≈ 319k บรรทัด (3,156/เคส)
+            # ≫ LOG_MAX_LINES → รอจนหลัง stop = startup kv line ถูก deque evict → None
+            kv = kv_cache_mb(handle.log_text)
             try:
                 eval_result = evaluate_with_llama(
                     cases, handle, tokenizer=tokenizer, fim_tokens=fim_tokens
                 )
             finally:
                 stop_server(handle)  # stop = join reader ในตัว (log ครบ — Review #6)
-                kv = kv_cache_mb(handle.log_text)
 
         latency = None
         if eval_result is not None:
