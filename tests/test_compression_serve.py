@@ -127,3 +127,29 @@ def test_ensure_sigint_reinstalls_when_inherited_ignored():
         assert signal_mod.getsignal(signal_mod.SIGINT) is signal_mod.default_int_handler
     finally:
         signal_mod.signal(signal_mod.SIGINT, previous)
+
+
+def test_serve_spontaneous_exit_reports_failure(capsys):
+    """Review #12: server ตายเอง (ไม่ใช่ user interrupt) → rc 1 + rc/log tail
+
+    ห้ามพิมพ์ "Server stopped." แล้วคืน 0 เหมือนเป็นการหยุดปกติ
+    """
+    mod = _load()
+    handle = _handle(wait=lambda: 1)
+    handle.log_text = "srv  starting\nllama_server: device lost\n"
+    stopped: list = []
+
+    rc = mod.serve(
+        Path("/tmp/m.gguf"),
+        port=8099,
+        device="vulkan",
+        start=lambda gguf, *, port, device: handle,
+        stop=lambda h: stopped.append(h),
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "exited unexpectedly (rc=1)" in captured.err
+    assert "device lost" in captured.err  # log tail โชว์ให้เห็นสาเหตุ
+    assert "Server stopped." not in captured.out
+    assert stopped == [handle]  # ยัง stop (noop) ก่อนคืนค่า
