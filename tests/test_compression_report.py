@@ -57,6 +57,7 @@ def test_build_report_schema_keys():
         "token_f1",
         "syntax_pass_rate",
         "execution_pass_rate",
+        "eval",  # Review #2: identity ของการทดสอบ (None เมื่อ --no-eval)
         "timestamp",
     }
     assert expected <= set(r)

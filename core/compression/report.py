@@ -28,8 +28,13 @@ def build_report(
     kv_cache_mb: float | None,
     exact_match_pct: float | None,
     token_f1: float | None,
+    eval_identity: dict | None = None,
 ) -> dict:
-    """รวม metrics → §4 schema dict (วัดไม่ได้ = None — syntax/execution = เสมอ None)"""
+    """รวม metrics → §4 schema dict (วัดไม่ได้ = None — syntax/execution = เสมอ None)
+
+    `eval_identity` = identity ของ evaluation ที่ใช้ (dataset/column/limit/cases/fim) —
+    เก็บไว้เทียบกับ baseline ก่อนแสดง delta (Review #2); None เมื่อ `--no-eval`
+    """
     return {
         "model": model,
         "variant": variant,
@@ -48,6 +53,7 @@ def build_report(
         "token_f1": token_f1,
         "syntax_pass_rate": None,  # ยังไม่มี sandbox phase — ห้ามเดา
         "execution_pass_rate": None,
+        "eval": eval_identity,
         "timestamp": datetime.now(UTC).isoformat(),
     }
 

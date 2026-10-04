@@ -109,18 +109,31 @@ def _load_fim(fim_key: str) -> dict:
     return registry[fim_key]
 
 
-def _baseline_dict(args: argparse.Namespace, source: Path) -> dict | None:
+def _baseline_dict(
+    args: argparse.Namespace, source: Path, built_cases: int | None
+) -> dict | None:
     path = Path(args.baseline) if args.baseline else pick_baseline(args.model, source)
     if path is None or not path.is_file():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        baseline = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         print(
             f"warning: baseline is not valid JSON: {path} — continuing without baseline",
             file=sys.stderr,
         )
         return None
+    if built_cases is None:
+        return baseline  # --no-eval: ไม่มี metrics ปัจจุบัน → delta ไม่ถูกแสดงอยู่ดี
+    if baseline.get("n") == built_cases:
+        return baseline
+    # Review #2: จำนวนเคสไม่ตรง = คนละการทดสอบ → ห้ามเทียบ (ตรง convention eval.py --compare)
+    print(
+        f"note: baseline skipped (case count differs: baseline n={baseline.get('n')!r}, "
+        f"run n={built_cases}) — deltas require the same evaluation",
+        file=sys.stderr,
+    )
+    return None
 
 
 def run_benchmark(args: argparse.Namespace) -> list[dict]:
@@ -132,6 +145,7 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
     tokenizer = None
     fim_tokens = None
     cases: list = []
+    eval_identity = None
     if not args.no_eval:
         fim_tokens = _load_fim(args.fim_key)
         tokenizer = AutoTokenizer.from_pretrained(str(source))
@@ -143,6 +157,20 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
             n_cases=args.eval_cases,
             max_seq_length=args.context,
         )
+        if not cases:
+            # Review #10: ห้ามรายงาน 0.0 ดูเหมือน score ที่วัดได้จริง → fail fast ก่อน start server
+            raise CompressionError(
+                "no eval cases built (dataset exhausted or --eval-cases 0) — "
+                "use --no-eval to skip evaluation."
+            )
+        eval_identity = {
+            "dataset_id": args.dataset,
+            "dataset_column": args.column,
+            "limit": args.limit,
+            "requested_cases": args.eval_cases,
+            "built_cases": len(cases),
+            "fim_key": args.fim_key,
+        }
 
     rows: list[dict] = []
     for variant in args.variants:
@@ -181,11 +209,14 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
             kv_cache_mb=kv,
             exact_match_pct=eval_result["exact_match_pct"] if eval_result else None,
             token_f1=eval_result["token_f1_mean"] if eval_result else None,
+            eval_identity=eval_identity,
         )
         rows.append(report)
         write_report(report, report_path(source, variant))
 
-    baseline = _baseline_dict(args, source)
+    baseline = _baseline_dict(
+        args, source, None if args.no_eval else len(cases)
+    )  # Review #2: เทียบก็ต่อเมื่อจำนวนเคสตรงกัน
     print(format_table(rows, baseline))
     return rows
 
