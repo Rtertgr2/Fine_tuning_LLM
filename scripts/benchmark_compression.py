@@ -202,7 +202,8 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
             parameter_count=parameter_count,
             context_tokens=args.context,
             model_disk_mb=gguf.stat().st_size / (1024 * 1024),
-            tokens_per_sec=bench["prompt_tps"],
+            tokens_per_sec=bench["gen_tps"],  # Review #8: headline = decode rate
+            prompt_tokens_per_sec=bench["prompt_tps"],  # pp เก็บแยก (อย่าเอา pp มาเป็น TPS)
             latency_ms=latency,
             load_time_ms=bench["load_ms"],
             peak_vram_mb=bench["peak_vram_mb"],

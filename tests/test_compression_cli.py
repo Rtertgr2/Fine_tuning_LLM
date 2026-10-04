@@ -389,3 +389,18 @@ def test_start_server_receives_context_arg(monkeypatch, tmp_path):
     cli.run_benchmark(args)
 
     assert captured_kwargs.get("ctx_size") == args.context
+
+
+def test_tokens_per_sec_maps_generation_rate(monkeypatch, tmp_path):
+    """Review #8: tokens_per_sec = gen rate (ไม่ใช่ prompt rate — ค่าเก่า overstate ~36x)"""
+    cli = _load_cli()
+    calls: list[str] = []
+    reports: list[dict] = []
+    _wire(cli, monkeypatch, tmp_path, calls, reports)
+
+    args = cli.build_parser().parse_args(["--model", "m", "--variants", "fp16"])
+    cli.run_benchmark(args)
+
+    row = reports[0]
+    assert row["tokens_per_sec"] == 50  # gen_tps (fake bench)
+    assert row["prompt_tokens_per_sec"] == 100  # pp เก็บแยก field

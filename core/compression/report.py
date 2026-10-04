@@ -22,6 +22,7 @@ def build_report(
     context_tokens: int,
     model_disk_mb: float,
     tokens_per_sec: float | None,
+    prompt_tokens_per_sec: float | None = None,
     latency_ms: float | None,
     load_time_ms: float | None,
     peak_vram_mb: float | None,
@@ -46,7 +47,8 @@ def build_report(
         "model_disk_mb": model_disk_mb,
         "peak_vram_mb": peak_vram_mb,
         "kv_cache_mb": kv_cache_mb,
-        "tokens_per_sec": tokens_per_sec,
+        "tokens_per_sec": tokens_per_sec,  # gen rate (Review #8: ไม่ใช่ pp — อย่า overstate decode)
+        "prompt_tokens_per_sec": prompt_tokens_per_sec,  # pp512 เก็บแยก (None = วัดไม่ได้)
         "latency_ms": latency_ms,
         "load_time_ms": load_time_ms,
         "exact_match_pct": exact_match_pct,
