@@ -363,3 +363,122 @@ def test_collect_config_resolves_local_model_name(monkeypatch, tmp_path):
     # Hub id (ไม่ใช่โฟลเดอร์) → ไม่แตะ คงพฤติกรรมเดิม
     config2, _ = _collect_config(*_cfg_args())
     assert config2["model_id"] == "m/x"
+
+
+# ---------------------------------------------------------------------------
+# H2: HTML escape (Fix.md) — ค่าจาก user/exception ห้ามโผล่เป็น HTML ตรง ๆ
+# ---------------------------------------------------------------------------
+
+
+class _StartCtl:
+    """controller ปลอม: start คืน error string ที่ฝัง payload แปลกปลอม"""
+
+    training_active = False
+
+    def __init__(self, error: str):
+        self._error = error
+
+    def start(self, config):
+        return self._error
+
+    def preflight(self, config, user_params_b=None):
+        raise NotImplementedError
+
+    def abort(self):
+        raise NotImplementedError
+
+    def tick(self):
+        raise NotImplementedError
+
+
+class _CheckCtl:
+    """controller ปลอม: preflight คืน reason ที่ฝัง payload แปลกปลอม"""
+
+    training_active = False
+
+    def preflight(self, config, user_params_b=None):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            verdict="OK",
+            reason='model <img src=x onerror="alert(1)"> fits',
+            spec_source="default",
+            weights_gb=1.0,
+            trainable_gb=0.1,
+            activations_gb=0.5,
+            overhead_gb=0.2,
+            total_required_gb=1.8,
+            free_vram_gb=8.0,
+        )
+
+    def start(self, config):
+        raise NotImplementedError
+
+    def abort(self):
+        raise NotImplementedError
+
+    def tick(self):
+        raise NotImplementedError
+
+
+def test_on_start_error_escapes_html():
+    """H2: error จาก controller (อาจฝัง model_id ของ user) ต้อง escape ก่อนโผล่ Markdown"""
+    from ui.dashboard import _make_handlers
+
+    h = _make_handlers(_StartCtl("bad model <img src=x onerror=alert(1)>"))
+    out = h["on_start"](*_cfg_args())
+    assert "<img" not in out
+    assert "&lt;img" in out
+    assert "**Error:**" in out  # ข้อความ English เดิมยังอยู่ครบ
+
+
+def test_on_eval_error_escapes_html():
+    """H2: exception message (อาจฝัง path/เนื้อหา dataset) ต้อง escape"""
+    from ui.dashboard import _make_handlers
+
+    class Evil(EvalController):
+        def run_eval(self, config, mode, **kw):
+            raise RuntimeError(f"{mode} <script>alert(1)</script> exploded")
+
+    rows, err = _make_handlers(Evil())["on_eval"](*_cfg_args())
+    assert rows is None
+    assert "<script>" not in err
+    assert "&lt;script&gt;" in err
+
+
+def test_on_save_adapter_escapes_dest_and_error(monkeypatch):
+    """H2: dest มาจาก output_dir ของ user, exc มาจาก exception — คู่ทั้งสองต้อง escape"""
+    from ui import dashboard as dash
+
+    h = dash._make_handlers(_StartCtl("unused"))
+    monkeypatch.setattr(
+        dash, "save_adapter_only", lambda _p: (_ for _ in ()).throw(ValueError("boom <b>x</b>"))
+    )
+    err_out = h["on_save_adapter"]("out")
+    assert "<b>" not in err_out and "&lt;b&gt;" in err_out
+
+    monkeypatch.setattr(dash, "save_adapter_only", lambda _p: 'dir<i>"quoted"</i>')
+    ok_out = h["on_save_adapter"]("out")
+    assert "<i>" not in ok_out and "&lt;i&gt;" in ok_out
+
+
+def test_on_merge_error_escapes_html(monkeypatch):
+    """H2: merge exception (อาจฝังชื่อไฟล์/พาธ ของ user) ต้อง escape"""
+    from ui import dashboard as dash
+
+    h = dash._make_handlers(_StartCtl("unused"))
+    monkeypatch.setattr(
+        dash, "merge_export", lambda _c: (_ for _ in ()).throw(ValueError("nope <u>x</u>"))
+    )
+    out = h["on_merge"](*_cfg_args())
+    assert "<u>" not in out and "&lt;u&gt;" in out
+
+
+def test_on_check_reason_escapes_html():
+    """H2: preflight reason อาจฝัง model_id/path ของ user — ต้อง escape ใน Markdown"""
+    from ui.dashboard import _make_handlers
+
+    md, verdict, _btn = _make_handlers(_CheckCtl())["on_check"](*_cfg_args())
+    assert "<img" not in md
+    assert "&lt;img" in md
+    assert verdict == "OK"

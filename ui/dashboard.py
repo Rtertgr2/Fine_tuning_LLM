@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import html
 import json
 from pathlib import Path
 
@@ -34,6 +35,7 @@ _STATUS_COLORS = {
     "starting": "#ca8a04",
     "training": "#ca8a04",
     "saving": "#ca8a04",
+    "aborting": "#ca8a04",  # M4: ระหว่าง kill — สีเดียวกับ banner "Aborting…"
     "finished": "#16a34a",
     "aborted": "#dc2626",
 }
@@ -109,7 +111,7 @@ def _make_handlers(controller) -> dict:
         md = (
             f"### Environment Check\n"
             f'<span style="color:{color};font-weight:bold">● {result.verdict}</span>'
-            f" — {result.reason}  \n"
+            f" — {html.escape(str(result.reason))}  \n"  # H2: escape user-derived text
             f"spec source: `{result.spec_source}`\n\n"
             f"| Component | GB |\n|---|---|\n{breakdown}"
         )
@@ -124,7 +126,8 @@ def _make_handlers(controller) -> dict:
         result = controller.start(config)
         if result == "started":
             return ""
-        return f'<span style="color:#dc2626">**Error:** {result}</span>'
+        # H2: error string อาจฝังค่าที่ user กรอก — escape ก่อนโผล่เป็น HTML
+        return f'<span style="color:#dc2626">**Error:** {html.escape(str(result))}</span>'
 
     def on_abort():
         if controller.abort():
@@ -184,7 +187,10 @@ def _make_handlers(controller) -> dict:
             rows, _qualitative = ev.compare_results(base, fine)
             return rows, ""
         except Exception as exc:  # noqa: BLE001 — แสดง error ทุกชนิดใน UI (English เสมอ)
-            return None, f'<span style="color:#dc2626">**Evaluation failed:** {exc}</span>'
+            return None, (
+                '<span style="color:#dc2626">'
+                f"**Evaluation failed:** {html.escape(str(exc))}</span>"
+            )
 
     def on_eval_render():
         """auto-render เมื่อ eval JSON ครบ (spec §3.4 "เลือก: auto-render") — ไม่บังคับรันใหม่"""
@@ -200,23 +206,23 @@ def _make_handlers(controller) -> dict:
         except Exception as exc:  # noqa: BLE001 — JSON เสีย → แสดงใน UI (English เสมอ)
             return None, (
                 '<span style="color:#dc2626">'
-                f"**Failed to load eval results:** {exc}</span>"
+                f"**Failed to load eval results:** {html.escape(str(exc))}</span>"
             )
 
     def on_save_adapter(output_dir):
         try:
             dest = save_adapter_only(output_dir)
-            return f'<span style="color:#16a34a">✅ Adapter saved → `{dest}`</span>'
+            return f'<span style="color:#16a34a">✅ Adapter saved → `{html.escape(str(dest))}`</span>'
         except Exception as exc:  # noqa: BLE001
-            return f'<span style="color:#dc2626">**Save failed:** {exc}</span>'
+            return f'<span style="color:#dc2626">**Save failed:** {html.escape(str(exc))}</span>'
 
     def on_merge(*cfg_values):
         config, _user_params = _collect_config(*cfg_values)
         try:
             dest = merge_export(config)
-            return f'<span style="color:#16a34a">✅ Merged weights saved → `{dest}`</span>'
+            return f'<span style="color:#16a34a">✅ Merged weights saved → `{html.escape(str(dest))}`</span>'
         except Exception as exc:  # noqa: BLE001
-            return f'<span style="color:#dc2626">**Merge failed:** {exc}</span>'
+            return f'<span style="color:#dc2626">**Merge failed:** {html.escape(str(exc))}</span>'
 
     def on_refresh_choices():
         """สลับมาแท็บ Configuration → detect โฟลเดอร์ models/ + datasets/ ใหม่

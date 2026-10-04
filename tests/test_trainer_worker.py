@@ -1,5 +1,6 @@
 """Tests สำหรับ core/trainer_worker.py — build_training_args pin hyperparameters จาก safe_defaults (สเปก plan.md §4.4)"""
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -476,3 +477,74 @@ def test_available_lora_targets_none_match_gives_english_error():
         wa.available_lora_targets(model)
     assert "LoRA" in str(exc.value)
     assert "not found" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# H1 + M1: validate_config hardening (Fix.md)
+# ---------------------------------------------------------------------------
+
+
+def test_validate_config_rejects_output_outside_sandbox():
+    bad = dict(FULL_CONFIG)
+    bad["output_dir"] = "/home/someone/important"
+    with pytest.raises(ValueError, match="output_dir"):
+        wa.validate_config(bad)  # เดิม: ผ่านหมด → commit_checkpoint rmtree ได้ทุกที่
+
+
+def test_validate_config_rejects_tilde_output_expanding_outside(tmp_path):
+    bad = dict(FULL_CONFIG)
+    bad["output_dir"] = "~/somewhere"
+    with pytest.raises(ValueError, match="output_dir"):
+        wa.validate_config(bad)
+
+
+def test_validate_config_allows_repo_and_temp_output(tmp_path):
+    repo_ok = dict(FULL_CONFIG)
+    repo_ok["output_dir"] = "data_cache/run"
+    wa.validate_config(repo_ok)
+
+    tmp_ok = dict(FULL_CONFIG)
+    tmp_ok["output_dir"] = str(tmp_path / "run")
+    wa.validate_config(tmp_ok)
+
+
+def test_validate_config_rejects_nonpositive_bounds():
+    for key, val in (("max_steps", 0), ("max_steps", -3), ("lora_rank", -5), ("code_limit", 0)):
+        cfg = dict(FULL_CONFIG)
+        cfg[key] = val
+        with pytest.raises(ValueError, match=key):
+            wa.validate_config(cfg)  # M1: เดิม fail ลึกใน SFTConfig/LoraConfig (error ไม่ชัด)
+
+    cfg = dict(FULL_CONFIG)
+    cfg["save_steps"] = 0
+    with pytest.raises(ValueError, match="save_steps"):
+        wa.validate_config(cfg)
+
+
+# ---------------------------------------------------------------------------
+# L4: use_safetensors=True ทุกจุดโหลดโมเดล (Fix.md) — ปฏิเสธ .bin (pickle) เสมอ
+# ---------------------------------------------------------------------------
+
+
+def test_all_auto_model_loads_pin_safetensors():
+    """AST จับครบทุก call site (trainer×3 + evaluator×1) — เพิ่มจุดใหม่โดยไม่ใส่ flag = เทสต์ตก"""
+    import ast
+
+    root = Path(__file__).resolve().parents[1]
+    found = 0
+    for rel in ("core/trainer_worker.py", "core/evaluator.py"):
+        tree = ast.parse((root / rel).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                continue
+            if node.func.attr != "from_pretrained":
+                continue
+            if not (isinstance(node.func.value, ast.Name) and node.func.value.id == "AutoModelForCausalLM"):
+                continue
+            found += 1
+            kws = {kw.arg: kw.value for kw in node.keywords}
+            flag = kws.get("use_safetensors")
+            assert isinstance(flag, ast.Constant) and flag.value is True, (
+                f"{rel}:{node.lineno} ต้องตั้ง use_safetensors=True (L4: ไม่รับ pickle .bin)"
+            )
+    assert found >= 4  # trainer×3 + evaluator×1

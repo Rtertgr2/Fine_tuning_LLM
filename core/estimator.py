@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import math
+import warnings
 from pathlib import Path
 from typing import NamedTuple
 
@@ -36,6 +37,7 @@ from configs.safe_defaults import (
     VRAM_SAFE_RATIO,
     VRAM_WARNING_RATIO,
 )
+from core.sandbox import project_roots
 
 GB = 1024**3
 
@@ -90,14 +92,26 @@ def list_models() -> list[str]:
     )
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
 def resolve_local_model(model_id: str) -> Path | None:
-    """หาโฟลเดอร์โมเดลท้องถิ่นจากค่า dropdown/path — ไม่พบ → None (ใช้ Hub)"""
+    """หาโฟลเดอร์โมเดลท้องถิ่นจากค่า dropdown/path — ไม่พบ/อยู่นอก sandbox → None (ใช้ Hub)
+
+    H1 (Fix.md): path ต้อง resolve อยู่ใต้ `MODELS_DIR` หรือ repo เสมอ — บล็อก
+    absolute path, `../` traversal และ symlink ที่ชี้ออกนอก (arbitrary file read)
+    """
+    roots = project_roots(REPO_ROOT, MODELS_DIR)
     direct = Path(model_id)
     if direct.is_dir():
-        return direct
+        resolved = direct.resolve()
+        if any(resolved.is_relative_to(root) for root in roots):
+            return resolved
     under_root = Path(MODELS_DIR) / model_id
     if under_root.is_dir():
-        return under_root
+        resolved = under_root.resolve()
+        if any(resolved.is_relative_to(root) for root in roots):
+            return resolved
     return None
 
 
@@ -129,8 +143,14 @@ def resolve_model_spec(model_id: str, user_params_b: float | None) -> ModelSpec:
         path = hf_hub_download(model_id, "config.json")
         with open(path, encoding="utf-8") as f:
             return _spec_from_config(json.load(f), "hf_config")
-    except Exception:  # noqa: BLE001, S110 — config เสีย/ออฟไลน์ → fallback ด้านล่าง (ห้ามเดา)
-        pass
+    except (
+        OSError,  # offline/HTTP: hub 1.x — HfHubHTTPError, LocalEntryNotFoundError ⊂ OSError
+        ValueError,  # JSONDecodeError, HFValidationError, int("x")
+        TypeError,  # int(None)
+        KeyError,  # config.json ไม่มี key ที่ต้องใช้
+    ) as exc:
+        # M3: จับเฉพาะ error ที่คาดไว้แล้ว fallback — bug อื่น (RuntimeError ฯลฯ) ต้องโผล่
+        warnings.warn(f"spec lookup failed for {model_id!r}: {exc}", stacklevel=2)
 
     # P ที่ใช้ไม่ได้ (ไม่กรอก / 0 / ลบ / NaN / inf) = ยังไม่ทราบที่เชื่อถือได้ → ห้ามเดา
     if user_params_b is None or not math.isfinite(user_params_b) or user_params_b <= 0:

@@ -13,15 +13,15 @@ import json
 import math
 import os
 import shutil
+import tempfile
 import traceback
 from collections.abc import Iterable
 from pathlib import Path
 
 import torch
-from datasets import Dataset
 from peft import LoraConfig
-from trl import SFTConfig, SFTTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
+from trl import SFTConfig, SFTTrainer
 
 from configs.safe_defaults import (
     DEFAULT_BATCH_SIZE,
@@ -39,6 +39,8 @@ from configs.safe_defaults import (
 )
 from core.dataset_builder import build_samples, filter_train_codes, iter_codes
 from core.ipc_bridge import error_msg, log_msg, metric_msg, status_msg
+from core.sandbox import project_roots
+from datasets import Dataset
 
 
 def available_lora_targets(model) -> list[str]:
@@ -247,8 +249,16 @@ REQUIRED_CONFIG_KEYS: frozenset[str] = frozenset(
 )
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
 def validate_config(config: dict) -> None:
-    """ตรวจ config ก่อนเทรน — ขาด key → ValueError บอกชื่อที่ขาด; seq length ผิด hard cap → ValueError"""
+    """ตรวจ config ก่อนเทรน — ขาด key → ValueError บอกชื่อที่ขาด; seq length ผิด hard cap → ValueError
+
+    H1: output_dir ต้องอยู่ใต้ repo หรือ system temp เท่านั้น — `commit_checkpoint`
+    ทำ rename/rmtree ใน output_dir ได้ตรง ๆ (กัน unintended data loss นอก sandbox);
+    M1: ค่าเชิงตัวเลขต้อง > 0 — fail ที่นี่ดีกว่า crash ลึกใน SFTConfig/LoraConfig
+    """
     missing = sorted(REQUIRED_CONFIG_KEYS - config.keys())
     if missing:
         raise ValueError(f"config missing key: {', '.join(missing)}")
@@ -257,6 +267,19 @@ def validate_config(config: dict) -> None:
         raise ValueError(
             f"max_seq_length={seq} must be in (0, {MAX_SEQ_LENGTH_CAP}] (hard cap plan §5)"
         )
+    raw_output = config["output_dir"]
+    output = Path(raw_output).expanduser().resolve()  # expanduser ก่อน: "~/..." จะไม่หนี sandbox
+    # worktree: data_cache เป็น symlink ชี้ main repo → project_roots resolve ให้แล้ว
+    allowed = project_roots(REPO_ROOT) + (Path(tempfile.gettempdir()).resolve(),)
+    if not any(output.is_relative_to(root) for root in allowed):
+        raise ValueError(
+            f"output_dir must be under the repo or the system temp dir (got: {raw_output!r})"
+        )
+    for key in ("max_steps", "lora_rank", "code_limit"):
+        if config[key] <= 0:
+            raise ValueError(f"{key} must be > 0 (got {config[key]})")
+    if "save_steps" in config and config["save_steps"] <= 0:
+        raise ValueError(f"save_steps must be > 0 (got {config['save_steps']})")
 
 
 def peak_xpu_memory_gb(kind: str = "reserved") -> float:
@@ -310,7 +333,10 @@ def run_training(config: dict, queue_) -> None:
         train_dataset = Dataset.from_dict({"text": texts})
 
         model = AutoModelForCausalLM.from_pretrained(
-            config["model_id"], dtype=torch.bfloat16, attn_implementation="sdpa"
+            config["model_id"],
+            dtype=torch.bfloat16,
+            attn_implementation="sdpa",
+            use_safetensors=True,  # L4: ปฏิเสธ .bin (pickle) เสมอ
         )
         lora = LoraConfig(
             r=config["lora_rank"],
@@ -408,6 +434,7 @@ def predict_middle(config: dict, prefix: str, suffix: str, queue_) -> None:
             config["model_id"],
             dtype=torch.bfloat16,
             attn_implementation="sdpa",
+            use_safetensors=True,  # L4: ปฏิเสธ .bin (pickle) เสมอ
         )
         model = PeftModel.from_pretrained(model, str(adapter_dir))
         device = "xpu" if torch.xpu.is_available() else "cpu"
@@ -492,7 +519,10 @@ def merge_export(config: dict) -> Path:
 
     adapter_dir = latest_checkpoint(config["output_dir"])
     model = AutoModelForCausalLM.from_pretrained(
-        config["model_id"], dtype=torch.bfloat16, attn_implementation="sdpa"
+        config["model_id"],
+        dtype=torch.bfloat16,
+        attn_implementation="sdpa",
+        use_safetensors=True,  # L4: ปฏิเสธ .bin (pickle) เสมอ
     )
     model = PeftModel.from_pretrained(model, str(adapter_dir))
     merged = model.merge_and_unload()

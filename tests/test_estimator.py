@@ -158,9 +158,10 @@ def _write_local_config(model_dir, *, hidden=1024, layers=12, inter=4096, vocab=
     )
 
 
-def test_resolve_model_spec_reads_local_config(tmp_path):
+def test_resolve_model_spec_reads_local_config(tmp_path, monkeypatch):
     model_dir = tmp_path / "my-model"
     _write_local_config(model_dir)
+    monkeypatch.setattr(est, "MODELS_DIR", str(tmp_path))  # H1: ต้องอยู่ใต้ sandbox root
 
     spec = est.resolve_model_spec(str(model_dir), None)
 
@@ -183,12 +184,83 @@ def test_resolve_model_spec_bare_name_under_models_dir(tmp_path, monkeypatch):
     assert spec.num_layers == 6
 
 
-def test_resolve_model_spec_broken_local_config_uses_user_fallback(tmp_path):
+def test_resolve_model_spec_broken_local_config_uses_user_fallback(tmp_path, monkeypatch):
+    monkeypatch.setattr(est, "MODELS_DIR", str(tmp_path))  # H1: อยู่ใต้ sandbox root
     model_dir = tmp_path / "broken-model"
     model_dir.mkdir()
     (model_dir / "config.json").write_text("{ not json", encoding="utf-8")
 
-    spec = est.resolve_model_spec(str(model_dir), 1.5)
+    with pytest.warns(UserWarning, match="broken-model"):  # M3: JSON เสีย → warning + fallback
+        spec = est.resolve_model_spec(str(model_dir), 1.5)
 
     assert spec.source == "user_fallback"
     assert spec.num_params == 1_500_000_000
+
+
+# ---------------------------------------------------------------------------
+# H1: path sandbox (Fix.md security review) — path นอก root ต้องถูกบล็อก
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_local_model_rejects_path_outside_roots(tmp_path, monkeypatch):
+    root = tmp_path / "models"
+    root.mkdir()
+    outside = tmp_path / "outside-model"
+    outside.mkdir()
+    monkeypatch.setattr(est, "MODELS_DIR", str(root))
+    monkeypatch.setattr(est, "REPO_ROOT", str(tmp_path / "no-repo"))
+
+    assert est.resolve_local_model(str(outside)) is None  # เดิม: คืน path ตรง ๆ (vulnerable)
+
+
+def test_resolve_local_model_rejects_dotdot_escape(tmp_path, monkeypatch):
+    root = tmp_path / "models"
+    root.mkdir()
+    (tmp_path / "secret").mkdir()
+    monkeypatch.setattr(est, "MODELS_DIR", str(root))
+    monkeypatch.setattr(est, "REPO_ROOT", str(tmp_path / "no-repo"))
+
+    # เดิม: Path(root) / "../secret" resolve หลุด root โดยไม่มีใครตรวจ
+    assert est.resolve_local_model(str(root / ".." / "secret")) is None
+
+
+def test_resolve_local_model_allows_repo_internal_path(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    (repo / "exports" / "merged").mkdir(parents=True)
+    monkeypatch.setattr(est, "REPO_ROOT", str(repo))
+    monkeypatch.setattr(est, "MODELS_DIR", str(tmp_path / "models"))
+
+    got = est.resolve_local_model(str(repo / "exports" / "merged"))
+    assert got == (repo / "exports" / "merged").resolve()  # Run B workflow ต้องใช้ได้ต่อ
+
+
+def test_resolve_local_model_name_under_models_dir_still_works(tmp_path, monkeypatch):
+    root = tmp_path / "models"
+    (root / "alpha").mkdir(parents=True)
+    monkeypatch.setattr(est, "MODELS_DIR", str(root))
+    monkeypatch.setattr(est, "REPO_ROOT", str(tmp_path / "no-repo"))
+
+    assert est.resolve_local_model("alpha") == (root / "alpha").resolve()
+
+
+# ---------------------------------------------------------------------------
+# M3: except กว้างเกินไป (Fix.md) — bug จริงต้องโผล่ ไม่ใช่ fallback เงียบ
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_model_spec_unexpected_error_propagates(monkeypatch, tmp_path):
+    def _boom(*args, **kwargs):
+        raise RuntimeError("unexpected bug")
+
+    monkeypatch.setattr(est, "hf_hub_download", _boom)
+    with pytest.raises(RuntimeError, match="unexpected bug"):  # เดิม: กลืนเงียบ → fallback
+        est.resolve_model_spec("acme/boom-model", None)
+
+
+def test_resolve_model_spec_known_errors_warn_and_fall_back(monkeypatch, tmp_path):
+    # OSError/ValueError/KeyError/JSONDecodeError = ที่คาดไว้ (offline/JSON เสีย/config ไม่ครบ)
+    # → warning + fallback คงพฤติกรรมเดิม — hub 1.x: HfHubHTTPError/LocalEntryNotFound ⊂ OSError
+    _patch_fetch(monkeypatch, tmp_path, error=OSError("offline"))
+    with pytest.warns(UserWarning, match="acme/offline-model"):
+        spec = est.resolve_model_spec("acme/offline-model", 1.5)
+    assert spec.source == "user_fallback"

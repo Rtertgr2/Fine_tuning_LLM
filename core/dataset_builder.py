@@ -24,6 +24,7 @@ from configs.safe_defaults import (
     MIN_SAMPLE_LINES,
     SEED,
 )
+from core.sandbox import project_roots
 from datasets import load_dataset
 
 _HEX_MAX = 16**32
@@ -96,8 +97,13 @@ def build_samples(
 
 
 def is_heldout(code: str, heldout_ratio: float = HELDOUT_RATIO) -> bool:
-    """แยก train/held-out ด้วย md5 คงที่ — code เดียวกันตกข้างเดียวกันเสมอ (กัน leakage)"""
-    digest = hashlib.md5(code.encode("utf-8")).hexdigest()
+    """แยก train/held-out ด้วย md5 คงที่ — code เดียวกันตกข้างเดียวกันเสมอ (กัน leakage)
+
+    L1 (Fix.md): md5 ที่นี่เป็นการ bucket ล้วน ๆ ไม่ใช่ security → usedforsecurity=False
+    (bandit/CodeQL ไม่ flag B324 โดย digest เปลี่ยนตรงไหนไม่ได้) — ห้ามเปลี่ยน algorithm:
+    digest ขยับ = split ขยับ = ทุก baseline eval (n=100) + checkpoint-500 เทียบกันไม่ได้อีก
+    """
+    digest = hashlib.md5(code.encode("utf-8"), usedforsecurity=False).hexdigest()
     return int(digest, 16) / _HEX_MAX < heldout_ratio
 
 
@@ -120,14 +126,26 @@ def list_datasets() -> list[str]:
     )
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
 def _resolve_local_dataset_dir(dataset_id: str) -> Path | None:
-    """หาโฟลเดอร์ dataset ท้องถิ่นจากค่า dropdown/path — ไม่พบ → None (ใช้ Hub)"""
+    """หาโฟลเดอร์ dataset ท้องถิ่นจากค่า dropdown/path — ไม่พบ/อยู่นอก sandbox → None (ใช้ Hub)
+
+    H1 (Fix.md): เหมือน `resolve_local_model` — resolve แล้วต้องอยู่ใต้
+    `DATASETS_DIR` หรือ repo เสมอ (กัน arbitrary file read ผ่าน path traversal)
+    """
+    roots = project_roots(REPO_ROOT, DATASETS_DIR)
     direct = Path(dataset_id)
     if direct.is_dir():
-        return direct
+        resolved = direct.resolve()
+        if any(resolved.is_relative_to(root) for root in roots):
+            return resolved
     under_root = Path(DATASETS_DIR) / dataset_id
     if under_root.is_dir():
-        return under_root
+        resolved = under_root.resolve()
+        if any(resolved.is_relative_to(root) for root in roots):
+            return resolved
     return None
 
 
@@ -153,6 +171,13 @@ def _read_local_parquet(ds_dir: Path, column: str, limit: int) -> list[str]:
             )
         for batch in pf.iter_batches(batch_size=64, columns=[column]):
             for value in batch.column(0).to_pylist():
+                # M2: ค่าไม่ใช่ text (int/None/...) → fail ตรงนี้ดีกว่า crash ลึกที่ .splitlines()
+                if not isinstance(value, str):
+                    raise ValueError(  # noqa: TRY004 — ข้อมูลใน column ผิด ไม่ใช่ type ของ arg (ตรง convention ฟังก์ชันนี้)
+                        f"Column '{column}' in local parquet '{file.name}' contains "
+                        f"non-text values ({type(value).__name__} at row {len(out)}) — "
+                        "clean the nulls or pick a text column."
+                    )
                 out.append(value)
                 if len(out) >= limit:
                     return out

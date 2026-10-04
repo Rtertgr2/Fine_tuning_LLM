@@ -39,7 +39,8 @@ def test_resolve_source_hub_id_error():
     assert "--local-dir models/" in msg
 
 
-def test_resolve_source_dir_without_config_json_error(tmp_path):
+def test_resolve_source_dir_without_config_json_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(estimator, "MODELS_DIR", str(tmp_path))  # H1: อยู่ใต้ sandbox root
     (tmp_path / "bare").mkdir()
     with pytest.raises(config.CompressionError) as exc:
         config.resolve_source(str(tmp_path / "bare"))

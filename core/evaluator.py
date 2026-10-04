@@ -199,6 +199,7 @@ def run_eval(
         config["model_id"],
         dtype=torch.bfloat16,
         attn_implementation="sdpa",
+        use_safetensors=True,  # L4: ปฏิเสธ .bin (pickle) เสมอ
     )
     if adapter_dir is not None:
         from peft import PeftModel

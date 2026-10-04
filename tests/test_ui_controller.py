@@ -492,3 +492,57 @@ def test_run_eval_dead_child_raises(tmp_path):
     with pytest.raises(RuntimeError, match="died without"):
         ctl.run_eval(valid_config(), "base", eval_dir=tmp_path, timeout=5.0)
     assert holder["process"] is not None
+
+
+# ---------------------------------------------------------------------------
+# M4: สถานะ "aborting" ระหว่าง kill (Fix.md) — ไม่ใช่ terminal ปลอม ๆ อีกต่อไป
+# ---------------------------------------------------------------------------
+
+
+def test_abort_shows_aborting_while_killing():
+    """M4: อ่าน status ระหว่าง abort_process → ต้องเป็น "aborting" (เดิม: "aborted" ตั้งก่อน kill)"""
+    fp = FakeProcess(alive=True, dies_on_terminate=False, dies_on_kill=True)
+    ctl, _fp, _state = make_controller(process=fp)
+    assert ctl.start(valid_config()) == "started"
+
+    seen = {}
+    orig_terminate = fp.terminate
+
+    def terminate_hook():
+        seen["status"] = ctl.tick().status  # tick ไม่ถูกบล็อก (lock ปล่อยก่อน kill — M9)
+        orig_terminate()
+
+    fp.terminate = terminate_hook
+    assert ctl.abort() is True
+    assert seen["status"] == "aborting"
+    assert ctl.tick().status == "aborted"  # ตายจริงแล้วค่อยเป็น terminal
+
+
+def test_status_message_cannot_overwrite_aborting():
+    """M4: child ยังส่ง status ระหว่าง kill ได้ — ห้ามทับ "aborting" (เดิม: ไม่ guard)"""
+    fp = FakeProcess(alive=True)
+    ctl, _fp, state = make_controller(process=fp)
+    ctl.start(valid_config())
+    ctl._status = "aborting"  # จำลองระหว่าง kill
+    state["queue"].messages.append(status_msg("training"))
+    snap = ctl.tick()
+    assert snap.status == "aborting"
+
+
+def test_watchdog_silent_while_aborting():
+    """M4: process ตายระหว่าง kill ที่ตั้งใจ → ห้ามกรี๊ด zombie ปลอม (เดิม: เห็น non-terminal → alarm)"""
+    fp = FakeProcess(alive=False)
+    ctl, _fp, _state = make_controller(process=fp)
+    ctl.start(valid_config())
+    ctl._status = "aborting"
+    snap = ctl.tick()
+    assert snap.watchdog is None
+
+
+def test_training_active_locked_while_aborting():
+    """M4: ระหว่าง "aborting" ปุ่มต้องล็อกต่อ (process ยังอาจอยู่) — ต่างจากเดิมที่เปิดด้วย "aborted" ก่อน kill"""
+    fp = FakeProcess(alive=True)
+    ctl, _fp, _state = make_controller(process=fp)
+    ctl.start(valid_config())
+    ctl._status = "aborting"
+    assert ctl.training_active is True

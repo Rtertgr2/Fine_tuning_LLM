@@ -5,9 +5,10 @@
 - ทุกการ mutate สถานะครอบด้วย `threading.Lock` (Timer thread vs button handlers)
 - Message จาก child ทุกใบผ่าน `ipc_bridge.validate_message` ก่อนใช้ — ไม่ผ่าน → เก็บเป็น error
 - Status: state machine `idle → starting → training → saving → finished|aborted`
+  + `aborting` สถานะกลางตอน kill (non-terminal — ปุ่มล็อกต่อ, watchdog ยอมรับ, status ใหม่ทับไม่ได้)
   หลัง terminal **ห้ามมี status ใหม่มาทับ** (Phase 3 ส่ง `finished` ซ้ำ 2 ครั้ง → dedup โดย ignore)
-- Abort: ตั้ง `aborted` ก่อน escalate แล้วเรียก `abort_process` (SIGTERM→SIGKILL) **นอก lock**
-  — child ถูก kill ไม่ทันส่ง status เอง (กัน watchdog false alarm, ส่งไม้ต่อจาก Phase 3)
+- Abort: ตั้ง `aborting` → เรียก `abort_process` (SIGTERM→SIGKILL) **นอก lock** → ตายจริงค่อยเป็น `aborted`
+  — ระหว่าง kill ไม่ต้องตั้ง terminal ปลอม ๆ อีก (watchdog ยอมรับ `aborting` กัน zombie false alarm)
   และการ escalate นอก lock ทำให้ tick ไม่ถูกบล็อก 10 วินาที
 """
 
@@ -128,24 +129,25 @@ class TrainingController:
             return "started"
 
     def abort(self) -> bool:
-        """ตั้ง aborted ทันที → SIGTERM→SIGKILL นอก lock — คืน True ถ้า process ตายสนิท
+        """ตั้ง `aborting` → SIGTERM→SIGKILL นอก lock → ตายจริงค่อยเป็น `aborted` — คืน True ถ้าตายสนิท
 
         เรียกตอนยังไม่ start → คืน False (ไม่ raise)
-        ถ้า escalate ล้มเหลว (เดดไลน์ kill ไม่ตาย) → status ถอยกลับ ไม่ปลดล็อกปุ่มทั้งที่ process ยังอยู่
+        M4 (Fix.md): "aborting" เป็นสถานะกลาง (non-terminal) — ปุ่มล็อกต่อระหว่าง kill,
+        watchdog ยอมรับ (ไม่กรี๊ด zombie ปลอม), status ใหม่จาก child ทับไม่ได้;
+        ถ้า escalate ล้มเหลว (เดดไลน์ kill ไม่ตาย) → status ถอยกลับ ไม่ปลดล็อกปุ่มทั้งที่ process ยังอยู่ (M8)
         """
         with self._lock:
             if self._process is None:
                 return False
             prev = self._status
             if prev not in TERMINAL_STATUSES:
-                # ตั้ง terminal ก่อน — กัน watchdog false alarm ระหว่าง kill (ส่งไม้ต่อจาก Phase 3)
-                self._status = "aborted"
+                self._status = "aborting"  # non-terminal ระหว่าง kill (M4)
             process = self._process
         dead = abort_process(process)  # นอก lock — tick ไม่ถูกบล็อก 10 วิ (M9)
-        if not dead:
-            with self._lock:
-                if self._status == "aborted" and prev not in TERMINAL_STATUSES:
-                    self._status = prev  # ยังไม่ตายจริง → คง lock ไว้ (M8)
+        with self._lock:
+            if self._status == "aborting":
+                # ตายจริง → terminal; ไม่ตาย → คง lock ไว้ (M8)
+                self._status = "aborted" if dead else prev
         return dead
 
     def exit(self) -> None:
@@ -224,8 +226,8 @@ class TrainingController:
             self._append_log(msg["level"], msg["text"])
         elif mtype == "status":
             state = msg["state"]
-            if self._status in TERMINAL_STATUSES:
-                return  # terminal แล้ว — ห้าม status ใหม่มาทับ (dedup กันซ้ำ)
+            if self._status in TERMINAL_STATUSES or self._status == "aborting":
+                return  # terminal/ระหว่าง kill — ห้าม status ใหม่มาทับ (dedup กันซ้ำ, M4)
             if state in TRAINING_STATUSES:
                 self._status = state
         elif mtype == "error":

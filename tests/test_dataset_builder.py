@@ -4,6 +4,8 @@ import json
 import random
 from pathlib import Path
 
+import pytest
+
 from configs.safe_defaults import HELDOUT_RATIO, MAX_SEQ_LENGTH_DEFAULT
 from core import dataset_builder as db
 
@@ -182,9 +184,10 @@ def _write_parquet(path, values: list[str], column: str = "content"):
     pq.write_table(pa.table({column: values}), path)
 
 
-def test_iter_codes_reads_local_parquet_folder_sorted_multifile(tmp_path):
+def test_iter_codes_reads_local_parquet_folder_sorted_multifile(tmp_path, monkeypatch):
     from core import dataset_builder as db
 
+    monkeypatch.setattr(db, "DATASETS_DIR", str(tmp_path))  # H1: ต้องอยู่ใต้ sandbox root
     ds = tmp_path / "local-ds"
     ds.mkdir()
     _write_parquet(ds / "part-00001.parquet", ["b1", "b2"])
@@ -206,9 +209,10 @@ def test_iter_codes_resolves_bare_name_under_datasets_dir(tmp_path, monkeypatch)
     assert db.iter_codes("alpha", "content", limit=5) == ["x", "y"]
 
 
-def test_iter_codes_local_missing_column_gives_english_error(tmp_path):
+def test_iter_codes_local_missing_column_gives_english_error(tmp_path, monkeypatch):
     from core import dataset_builder as db
 
+    monkeypatch.setattr(db, "DATASETS_DIR", str(tmp_path))  # H1: อยู่ใต้ sandbox root
     ds = tmp_path / "local-ds"
     ds.mkdir()
     _write_parquet(ds / "part.parquet", ["x"], column="other_col")
@@ -223,9 +227,10 @@ def test_iter_codes_local_missing_column_gives_english_error(tmp_path):
         raise AssertionError("โฟลเดอร์ไม่มีคอลัมน์ที่ขอ → ต้อง ValueError")
 
 
-def test_iter_codes_local_folder_without_parquet_gives_english_error(tmp_path):
+def test_iter_codes_local_folder_without_parquet_gives_english_error(tmp_path, monkeypatch):
     from core import dataset_builder as db
 
+    monkeypatch.setattr(db, "DATASETS_DIR", str(tmp_path))  # H1: อยู่ใต้ sandbox root
     ds = tmp_path / "empty-ds"
     ds.mkdir()
     (ds / "notes.txt").write_text("no data", encoding="utf-8")
@@ -250,3 +255,67 @@ def test_iter_codes_and_list_support_nested_parquet_layout(tmp_path, monkeypatch
     monkeypatch.setattr(db, "DATASETS_DIR", str(root))
     assert db.list_datasets() == ["copied-ds"]
     assert db.iter_codes("copied-ds", "content", limit=5) == ["n1", "n2"]
+
+
+# ---------------------------------------------------------------------------
+# H1: path sandbox (Fix.md) — dataset ก็ต้องไม่หลุด root เหมือน model
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_local_dataset_rejects_path_outside_roots(tmp_path, monkeypatch):
+    root = tmp_path / "datasets"
+    root.mkdir()
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    monkeypatch.setattr(db, "DATASETS_DIR", str(root))
+    monkeypatch.setattr(db, "REPO_ROOT", str(tmp_path / "no-repo"))
+
+    assert db._resolve_local_dataset_dir(str(outside)) is None  # เดิม: คืนตรง ๆ (arbitrary read)
+
+
+def test_resolve_local_dataset_allows_repo_internal_path(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    ds = repo / "data_cache" / "local-ds"
+    ds.mkdir(parents=True)
+    monkeypatch.setattr(db, "REPO_ROOT", str(repo))
+    monkeypatch.setattr(db, "DATASETS_DIR", str(tmp_path / "datasets"))
+
+    got = db._resolve_local_dataset_dir(str(ds))
+    assert got == ds.resolve()
+
+
+def test_read_local_parquet_rejects_non_text_values(tmp_path):
+    """M2: column เป็น int → ValueError ภาษาอังกฤษบอกชื่อ column/ชนิดค่า/แถว (ไม่ใช่ AttributeError ลึก)"""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    ds = tmp_path / "ds"
+    ds.mkdir()
+    pq.write_table(pa.table({"nums": [1, 2, 3]}), ds / "part.parquet")
+
+    with pytest.raises(ValueError, match="nums"):
+        db._read_local_parquet(ds, "nums", limit=5)  # เดิม: คืน [1, 2, 3] แล้ว crash ลึก
+
+
+# ---------------------------------------------------------------------------
+# L1: md5 = bucket ล้วน ๆ (Fix.md) — ห้ามเปลี่ยน algorithm, ต้องไม่ถูก security scanner flag
+# ---------------------------------------------------------------------------
+
+
+def test_is_heldout_pins_md5_split_membership():
+    """ค่าเหล่านี้มาจาก md5 จริง — เปลี่ยน hash = ขยับ split = base.json/finetuned.json (n=100)
+    เทียบกันไม่ได้อีก + checkpoint-500 เปลี่ยนชุดเทรน (ทุก evidence บน baselines เดิม)"""
+    assert db.is_heldout("def foo(): pass") is True
+    assert db.is_heldout("print(1)") is True
+    assert db.is_heldout("x = [i*i for i in range(10)]") is False
+    assert db.is_heldout("") is False
+    assert db.is_heldout("a") is True
+
+
+def test_is_heldout_declares_usedforsecurity_false():
+    """md5 ที่นี่ไม่ได้ใช้เพื่อ security → usedforsecurity=False ให้ bandit/CodeQL ไม่ flag (B324)
+    โดย digest/ผลลัพธ์เปลี่ยนแปลงตรงไหนไม่ได้เลย"""
+    import inspect
+
+    src = inspect.getsource(db.is_heldout)
+    assert "usedforsecurity=False" in src  # เดิม: ไม่มี → scanner ฟ้อง md5
