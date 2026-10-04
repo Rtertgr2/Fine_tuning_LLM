@@ -4,6 +4,8 @@ import json
 import random
 from pathlib import Path
 
+import pytest
+
 from configs.safe_defaults import HELDOUT_RATIO, MAX_SEQ_LENGTH_DEFAULT
 from core import dataset_builder as db
 
@@ -280,3 +282,16 @@ def test_resolve_local_dataset_allows_repo_internal_path(tmp_path, monkeypatch):
 
     got = db._resolve_local_dataset_dir(str(ds))
     assert got == ds.resolve()
+
+
+def test_read_local_parquet_rejects_non_text_values(tmp_path):
+    """M2: column เป็น int → ValueError ภาษาอังกฤษบอกชื่อ column/ชนิดค่า/แถว (ไม่ใช่ AttributeError ลึก)"""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    ds = tmp_path / "ds"
+    ds.mkdir()
+    pq.write_table(pa.table({"nums": [1, 2, 3]}), ds / "part.parquet")
+
+    with pytest.raises(ValueError, match="nums"):
+        db._read_local_parquet(ds, "nums", limit=5)  # เดิม: คืน [1, 2, 3] แล้ว crash ลึก

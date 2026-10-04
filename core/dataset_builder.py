@@ -166,6 +166,13 @@ def _read_local_parquet(ds_dir: Path, column: str, limit: int) -> list[str]:
             )
         for batch in pf.iter_batches(batch_size=64, columns=[column]):
             for value in batch.column(0).to_pylist():
+                # M2: ค่าไม่ใช่ text (int/None/...) → fail ตรงนี้ดีกว่า crash ลึกที่ .splitlines()
+                if not isinstance(value, str):
+                    raise ValueError(  # noqa: TRY004 — ข้อมูลใน column ผิด ไม่ใช่ type ของ arg (ตรง convention ฟังก์ชันนี้)
+                        f"Column '{column}' in local parquet '{file.name}' contains "
+                        f"non-text values ({type(value).__name__} at row {len(out)}) — "
+                        "clean the nulls or pick a text column."
+                    )
                 out.append(value)
                 if len(out) >= limit:
                     return out

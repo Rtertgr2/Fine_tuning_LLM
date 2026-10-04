@@ -184,12 +184,14 @@ def test_resolve_model_spec_bare_name_under_models_dir(tmp_path, monkeypatch):
     assert spec.num_layers == 6
 
 
-def test_resolve_model_spec_broken_local_config_uses_user_fallback(tmp_path):
+def test_resolve_model_spec_broken_local_config_uses_user_fallback(tmp_path, monkeypatch):
+    monkeypatch.setattr(est, "MODELS_DIR", str(tmp_path))  # H1: อยู่ใต้ sandbox root
     model_dir = tmp_path / "broken-model"
     model_dir.mkdir()
     (model_dir / "config.json").write_text("{ not json", encoding="utf-8")
 
-    spec = est.resolve_model_spec(str(model_dir), 1.5)
+    with pytest.warns(UserWarning, match="broken-model"):  # M3: JSON เสีย → warning + fallback
+        spec = est.resolve_model_spec(str(model_dir), 1.5)
 
     assert spec.source == "user_fallback"
     assert spec.num_params == 1_500_000_000
@@ -239,3 +241,26 @@ def test_resolve_local_model_name_under_models_dir_still_works(tmp_path, monkeyp
     monkeypatch.setattr(est, "REPO_ROOT", str(tmp_path / "no-repo"))
 
     assert est.resolve_local_model("alpha") == (root / "alpha").resolve()
+
+
+# ---------------------------------------------------------------------------
+# M3: except กว้างเกินไป (Fix.md) — bug จริงต้องโผล่ ไม่ใช่ fallback เงียบ
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_model_spec_unexpected_error_propagates(monkeypatch, tmp_path):
+    def _boom(*args, **kwargs):
+        raise RuntimeError("unexpected bug")
+
+    monkeypatch.setattr(est, "hf_hub_download", _boom)
+    with pytest.raises(RuntimeError, match="unexpected bug"):  # เดิม: กลืนเงียบ → fallback
+        est.resolve_model_spec("acme/boom-model", None)
+
+
+def test_resolve_model_spec_known_errors_warn_and_fall_back(monkeypatch, tmp_path):
+    # OSError/ValueError/KeyError/JSONDecodeError = ที่คาดไว้ (offline/JSON เสีย/config ไม่ครบ)
+    # → warning + fallback คงพฤติกรรมเดิม — hub 1.x: HfHubHTTPError/LocalEntryNotFound ⊂ OSError
+    _patch_fetch(monkeypatch, tmp_path, error=OSError("offline"))
+    with pytest.warns(UserWarning, match="acme/offline-model"):
+        spec = est.resolve_model_spec("acme/offline-model", 1.5)
+    assert spec.source == "user_fallback"
