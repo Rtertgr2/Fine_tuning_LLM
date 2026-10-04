@@ -33,6 +33,7 @@ HELDOUT_RATIO: float = 0.10
 DEFAULT_MODEL_NUM_PARAMS: int = 498_431_872
 DEFAULT_MODEL_HIDDEN_SIZE: int = 896
 DEFAULT_MODEL_NUM_LAYERS: int = 24
+DEFAULT_MODEL_VOCAB_SIZE: int = 151_936  # config.json จริงของ Qwen2.5-Coder-0.5B (logits buffer)
 DEFAULT_LORA_NUM_PARAMS: int = 4_399_104
 DEFAULT_BATCH_SIZE: int = 1
 ESTIMATOR_OVERHEAD_GB: float = 0.8  # calibrate Phase 5 §8.4: เดิม 1.0 → err 11.1% (peak 1.81GB) → 0.80
@@ -50,6 +51,9 @@ WARMUP_RATIO: float = 0.03
 SAVE_TOTAL_LIMIT: int = 2
 SAVE_STEPS: int = 100
 MAX_STEPS: int = 500
+# Validation loop ระหว่างเทรน (plan3 §4.4 เพิ่มเติม — overfit ต้องเห็นกลางทาง ไม่ใช่ตอนจบ)
+VAL_EVAL_SAMPLES: int = 32  # heldout samples ต่อรอบ eval (val loss ไม่ต้องแม่นเท่า final eval)
+VAL_EVAL_MIN_STEPS: int = 50  # eval อย่างน้อยทุก 50 steps (ถี่กว่านี้ overhead ไม่คุ้ม)
 NONFINITE_ABORT_THRESHOLD: int = 3
 LORA_RANK_DEFAULT: int = 8
 LORA_TARGET_MODULES: tuple[str, ...] = (

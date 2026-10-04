@@ -102,6 +102,127 @@ def test_truncation_keeps_eos():
     assert n_tokens <= MAX_SEQ_LENGTH_DEFAULT, f"{n_tokens} tokens"
 
 
+def _qwen_tokenizer():
+    from transformers import AutoTokenizer
+
+    return AutoTokenizer.from_pretrained(
+        "Qwen/Qwen2.5-Coder-0.5B", local_files_only=True
+    )
+
+
+def _expected_fim_parts(code: str, seed: int, fim_rate: float):
+    """จำลอง rng stream ของ build_samples เพื่อรู้ prefix/suffix/middle จริง"""
+    rng = random.Random(seed)
+    is_fim = rng.random() < fim_rate
+    assert is_fim, "test นี้ต้องเดินเข้า FIM branch"
+    return db.split_fim(code, rng)
+
+
+def test_fim_budget_keeps_middle_or_drops_sample():
+    # 🔴 regression: middle อยู่ท้าย PSM → tail-truncate เดิมตัด middle แล้วประกบ EOS
+    # กลาง span (สอนโมเดลผิด) — ต้องมาครบทั้งก้อนหรือ drop เท่านั้น
+    tokenizer = _qwen_tokenizer()
+    long_code = "\n".join(f"value_{i} = compute({i})" for i in range(200)) + "\n"
+    outputs = list(
+        db.build_samples(
+            [long_code],
+            fim_tokens=QWEN,
+            eos=EOS,
+            fim_rate=1.0,
+            seed=42,
+            tokenizer=tokenizer,
+            max_seq_length=MAX_SEQ_LENGTH_DEFAULT,
+        )
+    )
+    _prefix, _suffix, middle = _expected_fim_parts(long_code, 42, 1.0)
+    eos_len = len(tokenizer.encode(EOS, add_special_tokens=False))
+    overhead = sum(
+        len(tokenizer.encode(t, add_special_tokens=False)) for t in QWEN.values()
+    )
+    middle_len = len(tokenizer.encode(middle, add_special_tokens=False))
+    budget = MAX_SEQ_LENGTH_DEFAULT - eos_len
+    if middle_len + overhead > budget:
+        assert outputs == [], f"middle {middle_len}+overhead เกิน budget → ต้อง drop"
+        return
+    assert len(outputs) == 1, "middle อยู่ใน budget → ต้อง yield (แค่หด prefix/suffix)"
+    out = outputs[0]
+    assert out.endswith(EOS)
+    got_middle = out.split(QWEN["middle"], 1)[1][: -len(EOS)]
+    assert got_middle == middle, "middle ต้องมาครบทุกอักขระ (ห้าม tail-truncate)"
+    n_tokens = len(tokenizer.encode(out, add_special_tokens=False))
+    assert n_tokens <= MAX_SEQ_LENGTH_DEFAULT, f"{n_tokens} tokens"
+
+
+def test_fim_dropped_when_middle_exceeds_budget():
+    tokenizer = _qwen_tokenizer()
+    outputs = list(
+        db.build_samples(
+            [MULTI_LINE_CODE],
+            fim_tokens=QWEN,
+            eos=EOS,
+            fim_rate=1.0,
+            seed=42,
+            tokenizer=tokenizer,
+            max_seq_length=5,
+        )
+    )
+    assert outputs == [], "budget 5 tokens ใส่ middle ไม่ได้ → drop ทั้งก้อน"
+
+
+def test_plain_lm_truncate_unchanged():
+    # plain LM (ไม่ใช่ FIM) ยัง tail-truncate + EOS เหมือนเดิมเป๊ะ
+    tokenizer = _qwen_tokenizer()
+    long_code = "\n".join(f"value_{i} = compute({i})" for i in range(200)) + "\n"
+    outputs = list(
+        db.build_samples(
+            [long_code],
+            fim_tokens=QWEN,
+            eos=EOS,
+            fim_rate=0.0,
+            seed=42,
+            tokenizer=tokenizer,
+            max_seq_length=MAX_SEQ_LENGTH_DEFAULT,
+        )
+    )
+    assert len(outputs) == 1
+    budget = MAX_SEQ_LENGTH_DEFAULT - len(tokenizer.encode(EOS, add_special_tokens=False))
+    expected = db.truncate_to_tokens(long_code, tokenizer, budget) + EOS
+    assert outputs[0] == expected
+
+
+def test_build_eval_texts_heldout_only_and_limited():
+    # 🟡 val loop: eval ต้องมาจาก heldout (ไม่เคยเห็นตอนเทรน) จำกัด limit
+    codes = _codes(40)
+    heldout = [c for c in codes if db.is_heldout(c)]
+    assert heldout and len(heldout) < len(codes), "fixture ต้องมีทั้งสองฝั่ง (md5 bucket)"
+    texts = db.build_eval_texts(
+        codes,
+        fim_tokens=QWEN,
+        eos=EOS,
+        tokenizer=None,
+        max_seq_length=MAX_SEQ_LENGTH_DEFAULT,
+        limit=3,
+    )
+    assert len(texts) == min(len(heldout), 3)
+    expected = list(db.build_samples(heldout, fim_tokens=QWEN, eos=EOS))[:3]
+    assert texts == expected  # ตรงกับ build_samples บน heldout เฉย ๆ (seed เดิม)
+
+
+def test_build_eval_texts_empty_when_no_heldout():
+    # dataset ที่ไม่มี code ตก heldout → [] (run_training ต้องปิด eval loop แทน crash)
+    codes = [c for c in _codes(60) if not db.is_heldout(c)]
+    assert codes, "ต้องหา non-heldout ได้บ้าง"
+    texts = db.build_eval_texts(
+        codes,
+        fim_tokens=QWEN,
+        eos=EOS,
+        tokenizer=None,
+        max_seq_length=MAX_SEQ_LENGTH_DEFAULT,
+        limit=3,
+    )
+    assert texts == []
+
+
 def test_heldout_stable_and_ratio():
     # คงที่ต่อ code เดิม
     code = _codes(1)[0]

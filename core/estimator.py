@@ -27,6 +27,7 @@ from configs.safe_defaults import (
     DEFAULT_MODEL_ID,
     DEFAULT_MODEL_NUM_LAYERS,
     DEFAULT_MODEL_NUM_PARAMS,
+    DEFAULT_MODEL_VOCAB_SIZE,
     DISK_MIN_GB,
     ESTIMATOR_FALLBACK_HIDDEN_SIZE,
     ESTIMATOR_FALLBACK_NUM_LAYERS,
@@ -47,6 +48,7 @@ class ModelSpec(NamedTuple):
     hidden_size: int
     num_layers: int
     source: str  # "default" | "hf_config" | "user_fallback"
+    vocab_size: int = 0  # 0 = ไม่ทราบที่เชื่อถือได้ (user_fallback) → ไม่บวก logits
 
 
 class ModelSpecUnavailable(Exception):
@@ -129,8 +131,12 @@ def _spec_from_config(cfg: dict, source: str) -> ModelSpec:
     inter = int(cfg["intermediate_size"])
     vocab = int(cfg["vocab_size"])
     # สมมติ MHA (4d²) — กว่าจริงเล็กน้อยสำหรับ GQA = ทิศทางปลอดภัย
-    num_params = n * (4 * d * d + 3 * d * inter) + vocab * d
-    return ModelSpec(num_params, d, n, source)
+    # tie_word_embeddings=false (หรือไม่มี key) → lm_head มี weight แยก
+    # → ต้องนับ vocab*d อีกครั้ง (ขาด = undercount ~7% สำหรับโมเดล untied → OOM;
+    # นับเกิน = ปลอดภัย — สอดคลับกับหลัก overcount = ปลอดภัย ข้างบน)
+    lm_head = 0 if cfg.get("tie_word_embeddings", False) else vocab * d
+    num_params = n * (4 * d * d + 3 * d * inter) + vocab * d + lm_head
+    return ModelSpec(num_params, d, n, source, vocab)
 
 
 def resolve_model_spec(model_id: str, user_params_b: float | None) -> ModelSpec:
@@ -141,6 +147,7 @@ def resolve_model_spec(model_id: str, user_params_b: float | None) -> ModelSpec:
             DEFAULT_MODEL_HIDDEN_SIZE,
             DEFAULT_MODEL_NUM_LAYERS,
             "default",
+            DEFAULT_MODEL_VOCAB_SIZE,
         )
     local = resolve_local_model(model_id)
     try:
@@ -210,7 +217,12 @@ def estimate(
     weights_b = spec.num_params * 2
     p_lora = spec.num_params * (DEFAULT_LORA_NUM_PARAMS / DEFAULT_MODEL_NUM_PARAMS)
     trainable_b = p_lora * 10
-    activations_b = batch_size * seq_length * spec.hidden_size * spec.num_layers * 2
+    # hidden states (b·s·d·N·2 — checkpointing เก็บ boundary ต่อชั้น) +
+    # logits buffer (b·s·vocab·4, float32) ตอน compute loss — ขาดหลัง = undercount
+    activations_b = (
+        batch_size * seq_length * spec.hidden_size * spec.num_layers * 2
+        + batch_size * seq_length * spec.vocab_size * 4
+    )
     overhead_b = ESTIMATOR_OVERHEAD_GB * GB
     total_b = weights_b + trainable_b + activations_b + overhead_b
 

@@ -15,8 +15,11 @@ FIXTURE_CONFIG = {
     "intermediate_size": 128,
     "vocab_size": 1000,
 }
-# 2×(4×64² + 3×64×128) + 1000×64 = 81_920 + 64_000
-FIXTURE_NUM_PARAMS = 145_920
+# 2×(4×64² + 3×64×128) + 1000×64 = 81_920 + 64_000 = 145_920
+# fixture ไม่มี key tie_word_embeddings → ถือว่า untied = นับ lm_head แยก
+# (ทิศทาง overcount = ปลอดภัย; ขาด head = undercount ~7% → OOM จริง)
+# + 1000×64 lm_head = 209_920
+FIXTURE_NUM_PARAMS = 209_920
 
 
 def _hw_ready(free: float = 20.0) -> dict:
@@ -58,6 +61,26 @@ def test_resolve_from_config(monkeypatch, tmp_path):
     assert spec.hidden_size == 64
     assert spec.num_layers == 2
     assert spec.source == "hf_config"
+
+
+def test_spec_counts_lm_head_when_untied(monkeypatch, tmp_path):
+    # 🔴 Qwen2.5-7B มี tie_word_embeddings=false → lm_head แยก (vocab*d)
+    # สูตรเดิมนับ vocab*d แค่ครั้งเดียว = undercount ~7% → น้ำหนักต่ำกว่าจริง ~1.1GB
+    _patch_fetch(
+        monkeypatch, tmp_path, content={**FIXTURE_CONFIG, "tie_word_embeddings": False}
+    )
+    spec = est.resolve_model_spec("acme/untied-model", None)
+    assert spec.num_params == FIXTURE_NUM_PARAMS  # = 145_920 + lm_head 64_000
+    assert spec.num_params == 145_920 + 1000 * 64
+
+
+def test_spec_no_lm_head_when_tied(monkeypatch, tmp_path):
+    # tie_word_embeddings=true (เช่น Qwen2.5-0.5B) → embedding กับหัวใช้ weight ชุดเดียว
+    _patch_fetch(
+        monkeypatch, tmp_path, content={**FIXTURE_CONFIG, "tie_word_embeddings": True}
+    )
+    spec = est.resolve_model_spec("acme/tied-model", None)
+    assert spec.num_params == 145_920
 
 
 def test_blocked_when_params_unknown(monkeypatch, tmp_path):
@@ -169,6 +192,7 @@ def test_resolve_model_spec_reads_local_config(tmp_path, monkeypatch):
     assert spec.hidden_size == 1024
     assert spec.num_layers == 12
     expected = 12 * (4 * 1024 * 1024 + 3 * 1024 * 4096) + 32000 * 1024
+    expected += 32000 * 1024  # ไม่มี key tie → นับ lm_head แยก (ปลอดภัย)
     assert spec.num_params == expected
 
 
@@ -195,6 +219,33 @@ def test_resolve_model_spec_broken_local_config_uses_user_fallback(tmp_path, mon
 
     assert spec.source == "user_fallback"
     assert spec.num_params == 1_500_000_000
+
+
+def test_default_spec_includes_vocab():
+    # vocab จริงจาก config ของ Qwen2.5-Coder-0.5B (เช็คจาก HF cache แล้ว)
+    spec = est.resolve_model_spec(DEFAULT_MODEL_ID, None)
+    assert spec.vocab_size == 151_936
+
+
+def test_estimate_activations_include_logits_buffer():
+    # 🟡 เดิมคิดแค่ hidden states (b·s·d·N·2) — ขาด logits buffer (b·s·vocab·4)
+    # ตอน compute loss ซึ่งเป็น activation ก้อนใหญ่สุดที่หายไป
+    result = est.estimate(
+        _hw_ready(), model_id=DEFAULT_MODEL_ID, batch_size=1, seq_length=1024
+    )
+    activations_b = result.activations_gb * GB
+    hidden_only = 1 * 1024 * 896 * 24 * 2
+    logits = 1 * 1024 * 151_936 * 4
+    assert activations_b == pytest.approx(hidden_only + logits, rel=1e-6)
+
+
+def test_estimate_logits_scale_with_batch_and_seq():
+    # b=2/s=2048 → activations ต้องมากกว่าสูตรเดิมเสมอ (เดิมเท่ากับเป๊ะ = undercount)
+    result = est.estimate(
+        _hw_ready(), model_id=DEFAULT_MODEL_ID, batch_size=2, seq_length=2048
+    )
+    old_formula = 2 * 2048 * 896 * 24 * 2
+    assert result.activations_gb * GB > old_formula
 
 
 # ---------------------------------------------------------------------------
