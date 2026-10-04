@@ -1,5 +1,6 @@
 """Tests สำหรับ core/trainer_worker.py — build_training_args pin hyperparameters จาก safe_defaults (สเปก plan.md §4.4)"""
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -518,3 +519,32 @@ def test_validate_config_rejects_nonpositive_bounds():
     cfg["save_steps"] = 0
     with pytest.raises(ValueError, match="save_steps"):
         wa.validate_config(cfg)
+
+
+# ---------------------------------------------------------------------------
+# L4: use_safetensors=True ทุกจุดโหลดโมเดล (Fix.md) — ปฏิเสธ .bin (pickle) เสมอ
+# ---------------------------------------------------------------------------
+
+
+def test_all_auto_model_loads_pin_safetensors():
+    """AST จับครบทุก call site (trainer×3 + evaluator×1) — เพิ่มจุดใหม่โดยไม่ใส่ flag = เทสต์ตก"""
+    import ast
+
+    root = Path(__file__).resolve().parents[1]
+    found = 0
+    for rel in ("core/trainer_worker.py", "core/evaluator.py"):
+        tree = ast.parse((root / rel).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                continue
+            if node.func.attr != "from_pretrained":
+                continue
+            if not (isinstance(node.func.value, ast.Name) and node.func.value.id == "AutoModelForCausalLM"):
+                continue
+            found += 1
+            kws = {kw.arg: kw.value for kw in node.keywords}
+            flag = kws.get("use_safetensors")
+            assert isinstance(flag, ast.Constant) and flag.value is True, (
+                f"{rel}:{node.lineno} ต้องตั้ง use_safetensors=True (L4: ไม่รับ pickle .bin)"
+            )
+    assert found >= 4  # trainer×3 + evaluator×1

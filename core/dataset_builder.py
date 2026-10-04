@@ -97,8 +97,13 @@ def build_samples(
 
 
 def is_heldout(code: str, heldout_ratio: float = HELDOUT_RATIO) -> bool:
-    """แยก train/held-out ด้วย md5 คงที่ — code เดียวกันตกข้างเดียวกันเสมอ (กัน leakage)"""
-    digest = hashlib.md5(code.encode("utf-8")).hexdigest()
+    """แยก train/held-out ด้วย md5 คงที่ — code เดียวกันตกข้างเดียวกันเสมอ (กัน leakage)
+
+    L1 (Fix.md): md5 ที่นี่เป็นการ bucket ล้วน ๆ ไม่ใช่ security → usedforsecurity=False
+    (bandit/CodeQL ไม่ flag B324 โดย digest เปลี่ยนตรงไหนไม่ได้) — ห้ามเปลี่ยน algorithm:
+    digest ขยับ = split ขยับ = ทุก baseline eval (n=100) + checkpoint-500 เทียบกันไม่ได้อีก
+    """
+    digest = hashlib.md5(code.encode("utf-8"), usedforsecurity=False).hexdigest()
     return int(digest, 16) / _HEX_MAX < heldout_ratio
 
 

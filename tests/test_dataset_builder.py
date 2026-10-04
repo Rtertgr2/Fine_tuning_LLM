@@ -295,3 +295,27 @@ def test_read_local_parquet_rejects_non_text_values(tmp_path):
 
     with pytest.raises(ValueError, match="nums"):
         db._read_local_parquet(ds, "nums", limit=5)  # เดิม: คืน [1, 2, 3] แล้ว crash ลึก
+
+
+# ---------------------------------------------------------------------------
+# L1: md5 = bucket ล้วน ๆ (Fix.md) — ห้ามเปลี่ยน algorithm, ต้องไม่ถูก security scanner flag
+# ---------------------------------------------------------------------------
+
+
+def test_is_heldout_pins_md5_split_membership():
+    """ค่าเหล่านี้มาจาก md5 จริง — เปลี่ยน hash = ขยับ split = base.json/finetuned.json (n=100)
+    เทียบกันไม่ได้อีก + checkpoint-500 เปลี่ยนชุดเทรน (ทุก evidence บน baselines เดิม)"""
+    assert db.is_heldout("def foo(): pass") is True
+    assert db.is_heldout("print(1)") is True
+    assert db.is_heldout("x = [i*i for i in range(10)]") is False
+    assert db.is_heldout("") is False
+    assert db.is_heldout("a") is True
+
+
+def test_is_heldout_declares_usedforsecurity_false():
+    """md5 ที่นี่ไม่ได้ใช้เพื่อ security → usedforsecurity=False ให้ bandit/CodeQL ไม่ flag (B324)
+    โดย digest/ผลลัพธ์เปลี่ยนแปลงตรงไหนไม่ได้เลย"""
+    import inspect
+
+    src = inspect.getsource(db.is_heldout)
+    assert "usedforsecurity=False" in src  # เดิม: ไม่มี → scanner ฟ้อง md5

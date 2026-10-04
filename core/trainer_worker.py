@@ -333,7 +333,10 @@ def run_training(config: dict, queue_) -> None:
         train_dataset = Dataset.from_dict({"text": texts})
 
         model = AutoModelForCausalLM.from_pretrained(
-            config["model_id"], dtype=torch.bfloat16, attn_implementation="sdpa"
+            config["model_id"],
+            dtype=torch.bfloat16,
+            attn_implementation="sdpa",
+            use_safetensors=True,  # L4: ปฏิเสธ .bin (pickle) เสมอ
         )
         lora = LoraConfig(
             r=config["lora_rank"],
@@ -431,6 +434,7 @@ def predict_middle(config: dict, prefix: str, suffix: str, queue_) -> None:
             config["model_id"],
             dtype=torch.bfloat16,
             attn_implementation="sdpa",
+            use_safetensors=True,  # L4: ปฏิเสธ .bin (pickle) เสมอ
         )
         model = PeftModel.from_pretrained(model, str(adapter_dir))
         device = "xpu" if torch.xpu.is_available() else "cpu"
@@ -515,7 +519,10 @@ def merge_export(config: dict) -> Path:
 
     adapter_dir = latest_checkpoint(config["output_dir"])
     model = AutoModelForCausalLM.from_pretrained(
-        config["model_id"], dtype=torch.bfloat16, attn_implementation="sdpa"
+        config["model_id"],
+        dtype=torch.bfloat16,
+        attn_implementation="sdpa",
+        use_safetensors=True,  # L4: ปฏิเสธ .bin (pickle) เสมอ
     )
     model = PeftModel.from_pretrained(model, str(adapter_dir))
     merged = model.merge_and_unload()
