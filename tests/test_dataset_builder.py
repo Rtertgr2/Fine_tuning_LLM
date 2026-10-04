@@ -270,7 +270,9 @@ def test_resolve_local_dataset_rejects_path_outside_roots(tmp_path, monkeypatch)
     monkeypatch.setattr(db, "DATASETS_DIR", str(root))
     monkeypatch.setattr(db, "REPO_ROOT", str(tmp_path / "no-repo"))
 
-    assert db._resolve_local_dataset_dir(str(outside)) is None  # เดิม: คืนตรง ๆ (arbitrary read)
+    # มีอยู่จริงนอก sandbox → ValueError (ห้าม None = caller จะส่งเข้า load_dataset)
+    with pytest.raises(ValueError, match="outside"):
+        db._resolve_local_dataset_dir(str(outside))
 
 
 def test_resolve_local_dataset_allows_repo_internal_path(tmp_path, monkeypatch):
@@ -319,3 +321,23 @@ def test_is_heldout_declares_usedforsecurity_false():
 
     src = inspect.getsource(db.is_heldout)
     assert "usedforsecurity=False" in src  # เดิม: ไม่มี → scanner ฟ้อง md5
+
+
+def test_iter_codes_outside_existing_path_never_hits_hub(monkeypatch, tmp_path):
+    """Bug: path parquet จริงนอก sandbox → None → load_dataset(path) = ส่ง local path เข้า Hub"""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    outside = tmp_path / "outside-ds"
+    outside.mkdir()
+    pq.write_table(pa.table({"content": ["a", "b"]}), outside / "part.parquet")
+    monkeypatch.setattr(db, "DATASETS_DIR", str(tmp_path / "datasets"))
+    monkeypatch.setattr(db, "REPO_ROOT", str(tmp_path / "repo"))
+
+    def _hub_called(*args, **kwargs):
+        raise AssertionError(f"HUB CALLED WITH LOCAL PATH: {args!r}")
+
+    monkeypatch.setattr(db, "load_dataset", _hub_called)
+
+    with pytest.raises(ValueError, match="outside"):
+        db.iter_codes(str(outside), "content", limit=5)

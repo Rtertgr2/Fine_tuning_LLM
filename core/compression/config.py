@@ -63,10 +63,21 @@ def resolve_source(model_id: str) -> Path:
     """ค่า `--model` → HF dir ที่มี `config.json` (path ตรง ๆ / ชื่อใต้ `MODELS_DIR`)
 
     ไม่พบในเครื่อง → CompressionError + คำสั่ง `hf download` (English เสมอ)
+    นอก sandbox → CompressionError บอกเรื่อง sandbox (คืน None ถูก caller ตีความ
+    ว่า "โหลดจาก Hub" → bug: ส่ง local path เข้า hf_hub_download);
+    input ที่เป็น path-like แม้ไม่มีจริง → ห้ามเสนอ `hf download` (คำสั่งใช้ไม่ได้)
     """
-    source = estimator.resolve_local_model(model_id)
+    try:
+        source = estimator.resolve_local_model(model_id)
+    except ValueError as exc:
+        raise CompressionError(str(exc)) from exc
     if source is None:
         name = Path(model_id).name
+        if Path(model_id).expanduser().is_absolute() or model_id.startswith((".", "~")):
+            raise CompressionError(
+                f"model not found locally: {model_id} (this looks like a local path — "
+                "check the path, or move it under models/)."
+            )
         raise CompressionError(
             f"model not found locally: {model_id}. "
             f"Download it first: hf download {model_id} --local-dir models/{name}"

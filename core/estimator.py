@@ -96,23 +96,30 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def resolve_local_model(model_id: str) -> Path | None:
-    """หาโฟลเดอร์โมเดลท้องถิ่นจากค่า dropdown/path — ไม่พบ/อยู่นอก sandbox → None (ใช้ Hub)
+    """หาโฟลเดอร์โมเดลท้องถิ่นจากค่า dropdown/path — ไม่พบจริง → None (ใช้ Hub)
 
     H1 (Fix.md): path ต้อง resolve อยู่ใต้ `MODELS_DIR` หรือ repo เสมอ — บล็อก
     absolute path, `../` traversal และ symlink ที่ชี้ออกนอก (arbitrary file read)
+    Bug fix: path ที่ *มีอยู่จริง* แต่นอก sandbox → raise ValueError (ห้ามคืน None) —
+    caller ตีความ None ว่า "โหลดจาก Hub" → ส่ง local path เข้า hf_hub_download ได้
     """
     roots = project_roots(REPO_ROOT, MODELS_DIR)
-    direct = Path(model_id)
-    if direct.is_dir():
-        resolved = direct.resolve()
-        if any(resolved.is_relative_to(root) for root in roots):
-            return resolved
-    under_root = Path(MODELS_DIR) / model_id
-    if under_root.is_dir():
-        resolved = under_root.resolve()
-        if any(resolved.is_relative_to(root) for root in roots):
-            return resolved
-    return None
+
+    def _check(candidate: Path) -> Path | None:
+        if not candidate.exists():
+            return None
+        resolved = candidate.resolve()
+        if not any(resolved.is_relative_to(root) for root in roots):
+            raise ValueError(
+                f"model path exists outside the allowed roots (repo, models/): {model_id!r} — "
+                "move it under models/ or the repo, or pass a Hugging Face repo id."
+            )
+        return resolved if candidate.is_dir() else None
+
+    resolved = _check(Path(model_id).expanduser())
+    if resolved is not None:
+        return resolved
+    return _check(Path(MODELS_DIR) / model_id)
 
 
 def _spec_from_config(cfg: dict, source: str) -> ModelSpec:

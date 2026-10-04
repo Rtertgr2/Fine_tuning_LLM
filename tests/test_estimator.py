@@ -210,7 +210,9 @@ def test_resolve_local_model_rejects_path_outside_roots(tmp_path, monkeypatch):
     monkeypatch.setattr(est, "MODELS_DIR", str(root))
     monkeypatch.setattr(est, "REPO_ROOT", str(tmp_path / "no-repo"))
 
-    assert est.resolve_local_model(str(outside)) is None  # เดิม: คืน path ตรง ๆ (vulnerable)
+    # มีอยู่จริงนอก sandbox → ValueError (ห้าม None = caller จะส่งเข้า Hub)
+    with pytest.raises(ValueError, match="outside"):
+        est.resolve_local_model(str(outside))
 
 
 def test_resolve_local_model_rejects_dotdot_escape(tmp_path, monkeypatch):
@@ -221,7 +223,8 @@ def test_resolve_local_model_rejects_dotdot_escape(tmp_path, monkeypatch):
     monkeypatch.setattr(est, "REPO_ROOT", str(tmp_path / "no-repo"))
 
     # เดิม: Path(root) / "../secret" resolve หลุด root โดยไม่มีใครตรวจ
-    assert est.resolve_local_model(str(root / ".." / "secret")) is None
+    with pytest.raises(ValueError, match="outside"):
+        est.resolve_local_model(str(root / ".." / "secret"))
 
 
 def test_resolve_local_model_allows_repo_internal_path(tmp_path, monkeypatch):
@@ -264,3 +267,30 @@ def test_resolve_model_spec_known_errors_warn_and_fall_back(monkeypatch, tmp_pat
     with pytest.warns(UserWarning, match="acme/offline-model"):
         spec = est.resolve_model_spec("acme/offline-model", 1.5)
     assert spec.source == "user_fallback"
+
+
+# ---------------------------------------------------------------------------
+# Bug: path ที่มีอยู่จริงนอก sandbox คืน None → caller ตีความว่า "โหลดจาก Hub"
+# (confused deputy: hf_hub_download ได้ path จริงไป → อาจโหลด repo ผิดเงียบ ๆ)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_model_spec_outside_existing_path_never_hits_hub(monkeypatch, tmp_path):
+    outside = tmp_path / "outside-model"
+    outside.mkdir()
+    (outside / "config.json").write_text(
+        json.dumps({"hidden_size": 64, "num_hidden_layers": 2,
+                    "intermediate_size": 128, "vocab_size": 256}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(est, "MODELS_DIR", str(tmp_path / "models"))
+    monkeypatch.setattr(est, "REPO_ROOT", str(tmp_path / "repo"))
+
+    def _hub_called(*args, **kwargs):
+        raise AssertionError(f"HUB CALLED WITH LOCAL PATH: {args!r}")
+
+    monkeypatch.setattr(est, "hf_hub_download", _hub_called)
+
+    # อยู่นอก sandbox → ต้อง reject ด้วย error ชัดเจน ห้าม fall through ไป Hub
+    with pytest.raises(ValueError, match="outside"):
+        est.resolve_model_spec(str(outside), None)

@@ -88,3 +88,30 @@ def test_device_args_vulkan_is_empty_and_cpu_is_not():
 @pytest.mark.skipif(shutil.which("vulkaninfo") is None, reason="vulkaninfo not installed")
 def test_check_vulkan_real():
     assert isinstance(config.check_vulkan(), bool)
+
+
+# ---------------------------------------------------------------------------
+# Bug: resolve_source — path นอก sandbox / path ที่ไม่มีจริง ต้องไม่แนะนำ "hf download"
+# (None ถูกตีความว่า = โหลดจาก Hub ทั้งที่ input เป็น local path)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_source_outside_path_gives_sandbox_error(monkeypatch, tmp_path):
+    outside = tmp_path / "outside-model"
+    outside.mkdir()
+    (outside / "config.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(estimator, "MODELS_DIR", str(tmp_path / "models"))
+    monkeypatch.setattr(estimator, "REPO_ROOT", str(tmp_path / "repo"))
+
+    with pytest.raises(config.CompressionError) as exc:
+        config.resolve_source(str(outside))
+    msg = str(exc.value)
+    assert "outside" in msg  # error บอกเรื่อง sandbox — ไม่ใช่ "ไปโหลดจาก Hub"
+    assert "hf download" not in msg
+
+
+def test_resolve_source_nonexistent_absolute_path_no_hf_suggestion():
+    # path .absolut eที่ไม่มีจริง — แนะนำ "hf download /abs/path" คือคำสั่งที่ใช้ไม่ได้เลย
+    with pytest.raises(config.CompressionError) as exc:
+        config.resolve_source("/no/such/model-dir")
+    assert "hf download /no/such" not in str(exc.value)
