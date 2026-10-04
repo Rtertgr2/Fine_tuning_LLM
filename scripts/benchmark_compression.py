@@ -41,7 +41,7 @@ from core.compression.report import (
     write_report,
 )
 from core.estimator import ModelSpecUnavailable, resolve_model_spec
-from core.evaluator import build_eval_cases
+from core.evaluator import EVAL_MAX_NEW_TOKENS, build_eval_cases
 from core.trainer_worker import AutoTokenizer
 
 
@@ -141,6 +141,10 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
     source = resolve_source(args.model)
     require_tools()
     parameter_count = _parameter_count(args.model)
+    # Review #7: server ต้องรันด้วย context ที่รายงาน = input budget (args.context —
+    # ตรงกับที่ build_eval_cases truncate) + gen headroom เท่า HF eval
+    # (EVAL_MAX_NEW_TOKENS) → worst case จริง 100 เคส fit ทั้งหมด (measure 2026-10-04)
+    server_ctx = args.context + EVAL_MAX_NEW_TOKENS
 
     tokenizer = None
     fim_tokens = None
@@ -180,7 +184,7 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
         kv = None
         eval_result = None
         if not args.no_eval:
-            handle = start_server(gguf, device=args.device, ctx_size=args.context)
+            handle = start_server(gguf, device=args.device, ctx_size=server_ctx)
             try:
                 eval_result = evaluate_with_llama(
                     cases, handle, tokenizer=tokenizer, fim_tokens=fim_tokens
@@ -200,7 +204,7 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
             backend=f"llama.cpp-{args.device}",
             weight_bits=VARIANT_BITS[variant],
             parameter_count=parameter_count,
-            context_tokens=args.context,
+            context_tokens=server_ctx,  # reported = applied (Review #7)
             model_disk_mb=gguf.stat().st_size / (1024 * 1024),
             tokens_per_sec=bench["gen_tps"],  # Review #8: headline = decode rate
             prompt_tokens_per_sec=bench["prompt_tps"],  # pp เก็บแยก (อย่าเอา pp มาเป็น TPS)

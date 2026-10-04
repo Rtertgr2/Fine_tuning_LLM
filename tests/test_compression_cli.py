@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.compression.config import DEFAULT_VARIANTS
+from core.evaluator import EVAL_MAX_NEW_TOKENS
 
 CLI_PATH = Path(__file__).resolve().parents[1] / "scripts" / "benchmark_compression.py"
 
@@ -370,7 +371,11 @@ def test_delta_shown_when_case_count_matches(monkeypatch, tmp_path):
 
 
 def test_start_server_receives_context_arg(monkeypatch, tmp_path):
-    """Review #7: CLI ต้องส่ง args.context เป็น ctx_size ให้ server (reported = applied)"""
+    """Review #7: CLI ต้องส่ง ctx ให้ server = ค่าที่รายงาน (input budget + gen headroom)
+
+    headroom = EVAL_MAX_NEW_TOKENS — worst case จริง 100 เคส: prompt 2051 + middle 246
+    = 2297 ≤ 2304 → ทุกเคส fit เท่า HF baseline (วัดจริง 2026-10-04)
+    """
     cli = _load_cli()
     calls: list[str] = []
     reports: list[dict] = []
@@ -388,7 +393,9 @@ def test_start_server_receives_context_arg(monkeypatch, tmp_path):
     args = cli.build_parser().parse_args(["--model", "m", "--variants", "fp16"])
     cli.run_benchmark(args)
 
-    assert captured_kwargs.get("ctx_size") == args.context
+    expected_ctx = args.context + EVAL_MAX_NEW_TOKENS
+    assert captured_kwargs.get("ctx_size") == expected_ctx
+    assert reports[0]["context_tokens"] == expected_ctx  # reported = applied
 
 
 def test_tokens_per_sec_maps_generation_rate(monkeypatch, tmp_path):
