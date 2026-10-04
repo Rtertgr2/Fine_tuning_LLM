@@ -102,12 +102,16 @@ def start_server(
     *,
     port: int | None = None,
     device: str = "vulkan",
+    ctx_size: int | None = None,
     timeout: float = 60.0,
 ) -> ServerHandle:
     """เปิด llama-server → รอ /health 200 → ยืนยันตัวตนผ่าน /props.model_alias
 
     ใช้ `-v` เสมอ (ruling) — บรรทัด `llama_kv_cache: size = X MiB` ที่ spec §4 ต้องการ
     มาแค่ verbose log; error ทุกกรณี = English + ชี้ทาง (--port / --device cpu)
+
+    `ctx_size` → `-c` ให้ server (Review #7: ค่าที่รายงานต้องเป็นค่าที่ server
+    ใช้จริง — None = ไม่ส่ง ให้ server ใช้ native context)
     """
     require_tools()
     if port is None:
@@ -121,6 +125,8 @@ def start_server(
         "--alias", alias,
         "-v",
     ]
+    if ctx_size is not None:
+        cmd += ["-c", str(ctx_size)]
     cmd += device_args(device)
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     handle = ServerHandle(proc=proc, url=f"http://127.0.0.1:{port}", alias=alias)

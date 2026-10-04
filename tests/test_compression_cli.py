@@ -367,3 +367,25 @@ def test_delta_shown_when_case_count_matches(monkeypatch, tmp_path):
     cli.run_benchmark(args)
 
     assert captured["baseline"]["exact_match_pct"] == 10.0
+
+
+def test_start_server_receives_context_arg(monkeypatch, tmp_path):
+    """Review #7: CLI ต้องส่ง args.context เป็น ctx_size ให้ server (reported = applied)"""
+    cli = _load_cli()
+    calls: list[str] = []
+    reports: list[dict] = []
+    _wire(cli, monkeypatch, tmp_path, calls, reports)
+    captured_kwargs: dict = {}
+    fake_handle = SimpleNamespace(
+        url="http://127.0.0.1:18080", alias="x", proc=None, log_text="", _reader=None
+    )
+    monkeypatch.setattr(
+        cli,
+        "start_server",
+        lambda g, **k: captured_kwargs.update(k) or fake_handle,
+    )
+
+    args = cli.build_parser().parse_args(["--model", "m", "--variants", "fp16"])
+    cli.run_benchmark(args)
+
+    assert captured_kwargs.get("ctx_size") == args.context

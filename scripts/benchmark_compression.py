@@ -180,7 +180,7 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
         kv = None
         eval_result = None
         if not args.no_eval:
-            handle = start_server(gguf, device=args.device)
+            handle = start_server(gguf, device=args.device, ctx_size=args.context)
             try:
                 eval_result = evaluate_with_llama(
                     cases, handle, tokenizer=tokenizer, fim_tokens=fim_tokens

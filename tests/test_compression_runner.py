@@ -354,3 +354,45 @@ def test_server_log_is_bounded():
     assert len(handle._log) == llama_runner.LOG_MAX_LINES
     assert handle.log_text.endswith(f"L{total - 1}\n")  # ท้ายอยู่
     assert "L0\n" not in handle.log_text  # หัวหลุดออก
+
+
+def test_start_server_passes_context_size(monkeypatch):
+    """Review #7: context ที่รายงานต้องเป็นค่าที่ส่งให้ server จริง (-c)"""
+
+    def fake_http_get(url, **kwargs):
+        if url.endswith("/health"):
+            return (200, "")
+        return (200, json.dumps({"model_alias": "m-q4_k_m"}))
+
+    captured_cmd: list = []
+    monkeypatch.setattr(
+        llama_runner.subprocess, "Popen", lambda cmd, **k: captured_cmd.append(cmd) or FakeProc(rc=None)
+    )
+    monkeypatch.setattr(llama_runner, "_http_get", fake_http_get)
+
+    llama_runner.start_server(
+        Path("/tmp/m-q4_k_m.gguf"), ctx_size=4096
+    )
+
+    cmd = captured_cmd[0]
+    assert "-c" in cmd
+    assert cmd[cmd.index("-c") + 1] == "4096"
+
+
+def test_start_server_omits_context_by_default(monkeypatch):
+    """ctx_size=None → ไม่ต้องใส่ -c (server ใช้ native context)"""
+
+    def fake_http_get(url, **kwargs):
+        if url.endswith("/health"):
+            return (200, "")
+        return (200, json.dumps({"model_alias": "m-q4_k_m"}))
+
+    captured_cmd: list = []
+    monkeypatch.setattr(
+        llama_runner.subprocess, "Popen", lambda cmd, **k: captured_cmd.append(cmd) or FakeProc(rc=None)
+    )
+    monkeypatch.setattr(llama_runner, "_http_get", fake_http_get)
+
+    llama_runner.start_server(Path("/tmp/m-q4_k_m.gguf"))
+
+    assert "-c" not in captured_cmd[0]
