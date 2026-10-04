@@ -36,6 +36,7 @@ from configs.safe_defaults import (
     VRAM_SAFE_RATIO,
     VRAM_WARNING_RATIO,
 )
+from core.sandbox import project_roots
 
 GB = 1024**3
 
@@ -90,14 +91,26 @@ def list_models() -> list[str]:
     )
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
 def resolve_local_model(model_id: str) -> Path | None:
-    """หาโฟลเดอร์โมเดลท้องถิ่นจากค่า dropdown/path — ไม่พบ → None (ใช้ Hub)"""
+    """หาโฟลเดอร์โมเดลท้องถิ่นจากค่า dropdown/path — ไม่พบ/อยู่นอก sandbox → None (ใช้ Hub)
+
+    H1 (Fix.md): path ต้อง resolve อยู่ใต้ `MODELS_DIR` หรือ repo เสมอ — บล็อก
+    absolute path, `../` traversal และ symlink ที่ชี้ออกนอก (arbitrary file read)
+    """
+    roots = project_roots(REPO_ROOT, MODELS_DIR)
     direct = Path(model_id)
     if direct.is_dir():
-        return direct
+        resolved = direct.resolve()
+        if any(resolved.is_relative_to(root) for root in roots):
+            return resolved
     under_root = Path(MODELS_DIR) / model_id
     if under_root.is_dir():
-        return under_root
+        resolved = under_root.resolve()
+        if any(resolved.is_relative_to(root) for root in roots):
+            return resolved
     return None
 
 

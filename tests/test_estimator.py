@@ -158,9 +158,10 @@ def _write_local_config(model_dir, *, hidden=1024, layers=12, inter=4096, vocab=
     )
 
 
-def test_resolve_model_spec_reads_local_config(tmp_path):
+def test_resolve_model_spec_reads_local_config(tmp_path, monkeypatch):
     model_dir = tmp_path / "my-model"
     _write_local_config(model_dir)
+    monkeypatch.setattr(est, "MODELS_DIR", str(tmp_path))  # H1: ต้องอยู่ใต้ sandbox root
 
     spec = est.resolve_model_spec(str(model_dir), None)
 
@@ -192,3 +193,49 @@ def test_resolve_model_spec_broken_local_config_uses_user_fallback(tmp_path):
 
     assert spec.source == "user_fallback"
     assert spec.num_params == 1_500_000_000
+
+
+# ---------------------------------------------------------------------------
+# H1: path sandbox (Fix.md security review) — path นอก root ต้องถูกบล็อก
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_local_model_rejects_path_outside_roots(tmp_path, monkeypatch):
+    root = tmp_path / "models"
+    root.mkdir()
+    outside = tmp_path / "outside-model"
+    outside.mkdir()
+    monkeypatch.setattr(est, "MODELS_DIR", str(root))
+    monkeypatch.setattr(est, "REPO_ROOT", str(tmp_path / "no-repo"))
+
+    assert est.resolve_local_model(str(outside)) is None  # เดิม: คืน path ตรง ๆ (vulnerable)
+
+
+def test_resolve_local_model_rejects_dotdot_escape(tmp_path, monkeypatch):
+    root = tmp_path / "models"
+    root.mkdir()
+    (tmp_path / "secret").mkdir()
+    monkeypatch.setattr(est, "MODELS_DIR", str(root))
+    monkeypatch.setattr(est, "REPO_ROOT", str(tmp_path / "no-repo"))
+
+    # เดิม: Path(root) / "../secret" resolve หลุด root โดยไม่มีใครตรวจ
+    assert est.resolve_local_model(str(root / ".." / "secret")) is None
+
+
+def test_resolve_local_model_allows_repo_internal_path(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    (repo / "exports" / "merged").mkdir(parents=True)
+    monkeypatch.setattr(est, "REPO_ROOT", str(repo))
+    monkeypatch.setattr(est, "MODELS_DIR", str(tmp_path / "models"))
+
+    got = est.resolve_local_model(str(repo / "exports" / "merged"))
+    assert got == (repo / "exports" / "merged").resolve()  # Run B workflow ต้องใช้ได้ต่อ
+
+
+def test_resolve_local_model_name_under_models_dir_still_works(tmp_path, monkeypatch):
+    root = tmp_path / "models"
+    (root / "alpha").mkdir(parents=True)
+    monkeypatch.setattr(est, "MODELS_DIR", str(root))
+    monkeypatch.setattr(est, "REPO_ROOT", str(tmp_path / "no-repo"))
+
+    assert est.resolve_local_model("alpha") == (root / "alpha").resolve()

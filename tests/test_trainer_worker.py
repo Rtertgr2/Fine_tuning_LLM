@@ -476,3 +476,45 @@ def test_available_lora_targets_none_match_gives_english_error():
         wa.available_lora_targets(model)
     assert "LoRA" in str(exc.value)
     assert "not found" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# H1 + M1: validate_config hardening (Fix.md)
+# ---------------------------------------------------------------------------
+
+
+def test_validate_config_rejects_output_outside_sandbox():
+    bad = dict(FULL_CONFIG)
+    bad["output_dir"] = "/home/someone/important"
+    with pytest.raises(ValueError, match="output_dir"):
+        wa.validate_config(bad)  # เดิม: ผ่านหมด → commit_checkpoint rmtree ได้ทุกที่
+
+
+def test_validate_config_rejects_tilde_output_expanding_outside(tmp_path):
+    bad = dict(FULL_CONFIG)
+    bad["output_dir"] = "~/somewhere"
+    with pytest.raises(ValueError, match="output_dir"):
+        wa.validate_config(bad)
+
+
+def test_validate_config_allows_repo_and_temp_output(tmp_path):
+    repo_ok = dict(FULL_CONFIG)
+    repo_ok["output_dir"] = "data_cache/run"
+    wa.validate_config(repo_ok)
+
+    tmp_ok = dict(FULL_CONFIG)
+    tmp_ok["output_dir"] = str(tmp_path / "run")
+    wa.validate_config(tmp_ok)
+
+
+def test_validate_config_rejects_nonpositive_bounds():
+    for key, val in (("max_steps", 0), ("max_steps", -3), ("lora_rank", -5), ("code_limit", 0)):
+        cfg = dict(FULL_CONFIG)
+        cfg[key] = val
+        with pytest.raises(ValueError, match=key):
+            wa.validate_config(cfg)  # M1: เดิม fail ลึกใน SFTConfig/LoraConfig (error ไม่ชัด)
+
+    cfg = dict(FULL_CONFIG)
+    cfg["save_steps"] = 0
+    with pytest.raises(ValueError, match="save_steps"):
+        wa.validate_config(cfg)

@@ -24,6 +24,7 @@ from configs.safe_defaults import (
     MIN_SAMPLE_LINES,
     SEED,
 )
+from core.sandbox import project_roots
 from datasets import load_dataset
 
 _HEX_MAX = 16**32
@@ -120,14 +121,26 @@ def list_datasets() -> list[str]:
     )
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
 def _resolve_local_dataset_dir(dataset_id: str) -> Path | None:
-    """หาโฟลเดอร์ dataset ท้องถิ่นจากค่า dropdown/path — ไม่พบ → None (ใช้ Hub)"""
+    """หาโฟลเดอร์ dataset ท้องถิ่นจากค่า dropdown/path — ไม่พบ/อยู่นอก sandbox → None (ใช้ Hub)
+
+    H1 (Fix.md): เหมือน `resolve_local_model` — resolve แล้วต้องอยู่ใต้
+    `DATASETS_DIR` หรือ repo เสมอ (กัน arbitrary file read ผ่าน path traversal)
+    """
+    roots = project_roots(REPO_ROOT, DATASETS_DIR)
     direct = Path(dataset_id)
     if direct.is_dir():
-        return direct
+        resolved = direct.resolve()
+        if any(resolved.is_relative_to(root) for root in roots):
+            return resolved
     under_root = Path(DATASETS_DIR) / dataset_id
     if under_root.is_dir():
-        return under_root
+        resolved = under_root.resolve()
+        if any(resolved.is_relative_to(root) for root in roots):
+            return resolved
     return None
 
 

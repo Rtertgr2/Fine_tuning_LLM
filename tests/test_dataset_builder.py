@@ -182,9 +182,10 @@ def _write_parquet(path, values: list[str], column: str = "content"):
     pq.write_table(pa.table({column: values}), path)
 
 
-def test_iter_codes_reads_local_parquet_folder_sorted_multifile(tmp_path):
+def test_iter_codes_reads_local_parquet_folder_sorted_multifile(tmp_path, monkeypatch):
     from core import dataset_builder as db
 
+    monkeypatch.setattr(db, "DATASETS_DIR", str(tmp_path))  # H1: ต้องอยู่ใต้ sandbox root
     ds = tmp_path / "local-ds"
     ds.mkdir()
     _write_parquet(ds / "part-00001.parquet", ["b1", "b2"])
@@ -206,9 +207,10 @@ def test_iter_codes_resolves_bare_name_under_datasets_dir(tmp_path, monkeypatch)
     assert db.iter_codes("alpha", "content", limit=5) == ["x", "y"]
 
 
-def test_iter_codes_local_missing_column_gives_english_error(tmp_path):
+def test_iter_codes_local_missing_column_gives_english_error(tmp_path, monkeypatch):
     from core import dataset_builder as db
 
+    monkeypatch.setattr(db, "DATASETS_DIR", str(tmp_path))  # H1: อยู่ใต้ sandbox root
     ds = tmp_path / "local-ds"
     ds.mkdir()
     _write_parquet(ds / "part.parquet", ["x"], column="other_col")
@@ -223,9 +225,10 @@ def test_iter_codes_local_missing_column_gives_english_error(tmp_path):
         raise AssertionError("โฟลเดอร์ไม่มีคอลัมน์ที่ขอ → ต้อง ValueError")
 
 
-def test_iter_codes_local_folder_without_parquet_gives_english_error(tmp_path):
+def test_iter_codes_local_folder_without_parquet_gives_english_error(tmp_path, monkeypatch):
     from core import dataset_builder as db
 
+    monkeypatch.setattr(db, "DATASETS_DIR", str(tmp_path))  # H1: อยู่ใต้ sandbox root
     ds = tmp_path / "empty-ds"
     ds.mkdir()
     (ds / "notes.txt").write_text("no data", encoding="utf-8")
@@ -250,3 +253,30 @@ def test_iter_codes_and_list_support_nested_parquet_layout(tmp_path, monkeypatch
     monkeypatch.setattr(db, "DATASETS_DIR", str(root))
     assert db.list_datasets() == ["copied-ds"]
     assert db.iter_codes("copied-ds", "content", limit=5) == ["n1", "n2"]
+
+
+# ---------------------------------------------------------------------------
+# H1: path sandbox (Fix.md) — dataset ก็ต้องไม่หลุด root เหมือน model
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_local_dataset_rejects_path_outside_roots(tmp_path, monkeypatch):
+    root = tmp_path / "datasets"
+    root.mkdir()
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    monkeypatch.setattr(db, "DATASETS_DIR", str(root))
+    monkeypatch.setattr(db, "REPO_ROOT", str(tmp_path / "no-repo"))
+
+    assert db._resolve_local_dataset_dir(str(outside)) is None  # เดิม: คืนตรง ๆ (arbitrary read)
+
+
+def test_resolve_local_dataset_allows_repo_internal_path(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    ds = repo / "data_cache" / "local-ds"
+    ds.mkdir(parents=True)
+    monkeypatch.setattr(db, "REPO_ROOT", str(repo))
+    monkeypatch.setattr(db, "DATASETS_DIR", str(tmp_path / "datasets"))
+
+    got = db._resolve_local_dataset_dir(str(ds))
+    assert got == ds.resolve()
