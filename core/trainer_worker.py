@@ -15,6 +15,7 @@ import os
 import shutil
 import tempfile
 import traceback
+import warnings
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -35,10 +36,16 @@ from configs.safe_defaults import (
     SAVE_STEPS,
     SAVE_TOTAL_LIMIT,
     SEED,
+    VAL_EVAL_MIN_STEPS,
     WARMUP_RATIO,
 )
-from core.dataset_builder import build_samples, filter_train_codes, iter_codes
-from core.ipc_bridge import error_msg, log_msg, metric_msg, status_msg
+from core.dataset_builder import (
+    build_eval_texts,
+    build_samples,
+    filter_train_codes,
+    iter_codes,
+)
+from core.ipc_bridge import error_msg, log_msg, metric_msg, status_msg, val_metric_msg
 from core.sandbox import project_roots
 from datasets import Dataset
 
@@ -58,12 +65,31 @@ def available_lora_targets(model) -> list[str]:
     return found
 
 
+def _xpu_bf16_supported() -> bool:
+    """ถาม runtime จริงว่า XPU รัน bf16 ได้ (🟡 เดิม hardcode=True ไม่เคยเช็ค)
+
+    API หาย/raise (torch เปลี่ยน mid-version, driver ไม่พร้อม) → True + warning
+    = คงพฤติกรรมเดิม ไม่ใช่ crash
+    """
+    try:
+        return bool(torch.xpu.is_bf16_supported())
+    # จับเฉพาะ error ที่คาด (แนว M3): API หาย/RuntimeError ของ driver → fallback
+    # bug อื่นที่ไม่คาด → ปล่อย raise ให้ run_training จับ (ห้าม swallow เงียบ)
+    except (AttributeError, RuntimeError, NotImplementedError) as exc:
+        warnings.warn(
+            f"bf16 support check unavailable ({exc}) — assuming supported",
+            stacklevel=2,
+        )
+        return True
+
+
 def build_training_args(
     output_dir: str,
     *,
     max_steps: int = MAX_STEPS,
     save_steps: int = SAVE_STEPS,
     max_seq_length: int = MAX_SEQ_LENGTH_DEFAULT,
+    has_eval_dataset: bool = True,
 ) -> SFTConfig:
     """สร้าง SFTConfig จาก safe_defaults — ทุกค่าถูก pin ด้วย test แล้ว
 
@@ -71,12 +97,16 @@ def build_training_args(
     `warmup_ratio` ออกแล้ว — คงสัดส่วน 3% ไว้แบบ dynamic (500 steps → 15)
     `max_seq_length` ต้องมาจาก config เพราะ packing ตัด/รวม token ที่ `max_length`
     (hardcode = UI ตั้งค่าใน Phase 4 ถูกเพิกเฉยเงียบ ๆ)
+    `has_eval_dataset=False` (ไม่มี heldout) → eval_strategy="no" — ห้ามตั้ง steps
+    แล้วไม่ส่ง eval_dataset (transformers raise)
     """
     return SFTConfig(
         output_dir=output_dir,
         max_steps=max_steps,
         save_steps=save_steps,
         save_strategy="steps",
+        eval_strategy="steps" if has_eval_dataset else "no",
+        eval_steps=max(VAL_EVAL_MIN_STEPS, max_steps // 10),
         per_device_train_batch_size=DEFAULT_BATCH_SIZE,
         gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
         learning_rate=LEARNING_RATE,
@@ -85,7 +115,7 @@ def build_training_args(
         save_total_limit=SAVE_TOTAL_LIMIT,
         gradient_checkpointing=True,
         optim="adamw_torch",
-        bf16=True,
+        bf16=_xpu_bf16_supported(),
         logging_steps=1,
         report_to=[],
         max_length=max_seq_length,
@@ -198,6 +228,16 @@ class StreamToQueueCallback(TrainerCallback):
         self.aborted = False
 
     def on_log(self, args, state, control, logs, **kwargs):
+        if "eval_loss" in logs:
+            # val loop: eval log (ไม่มี "loss") → val_metric (schema แยก — validate เข้ม)
+            self.queue.put(
+                val_metric_msg(
+                    step=logs.get("step", state.global_step),
+                    epoch=logs.get("epoch", 0.0),
+                    val_loss=logs["eval_loss"],
+                )
+            )
+            return
         if "loss" not in logs:
             self.queue.put(log_msg("INFO", str(logs)))
             return
@@ -331,6 +371,19 @@ def run_training(config: dict, queue_) -> None:
             )
         )
         train_dataset = Dataset.from_dict({"text": texts})
+        # val loop: heldout (ไม่เคยเห็นตอนเทรน) → eval_dataset — ไม่มี → None (ปิด eval)
+        eval_texts = build_eval_texts(
+            iter_codes(
+                config["dataset_id"],
+                config["dataset_column"],
+                limit=config["code_limit"],
+            ),
+            fim_tokens=fim_tokens,
+            eos=tokenizer.eos_token,
+            tokenizer=tokenizer,
+            max_seq_length=config["max_seq_length"],
+        )
+        eval_dataset = Dataset.from_dict({"text": eval_texts}) if eval_texts else None
 
         model = AutoModelForCausalLM.from_pretrained(
             config["model_id"],
@@ -354,8 +407,10 @@ def run_training(config: dict, queue_) -> None:
                 max_steps=config["max_steps"],
                 save_steps=config.get("save_steps", SAVE_STEPS),
                 max_seq_length=config["max_seq_length"],
+                has_eval_dataset=eval_dataset is not None,
             ),
             train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
             processing_class=tokenizer,
             peft_config=lora,
             callbacks=[callback],
