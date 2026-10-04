@@ -77,6 +77,9 @@ def _wire(cli, monkeypatch, tmp_path, calls: list[str], reports: list[dict]):
     monkeypatch.setattr(
         cli, "stop_server", lambda h, **k: calls.append("server.stop")
     )
+    monkeypatch.setattr(
+        cli, "kv_cache_mb", lambda text: calls.append("kv") or None
+    )  # Review #6: ต้องถูกเรียกหลัง stop (log ครบแล้ว)
 
     real_write = cli.write_report
 
@@ -123,7 +126,15 @@ def test_run_benchmark_orchestration_order(monkeypatch, tmp_path):
     )
     rows = cli.run_benchmark(args)
 
-    per_variant = ["artifact", "bench", "server.start", "eval", "server.stop", "report"]
+    per_variant = [
+        "artifact",
+        "bench",
+        "server.start",
+        "eval",
+        "server.stop",
+        "kv",  # Review #6: parse หลัง stop+join เท่านั้น
+        "report",
+    ]
     assert calls == per_variant * 2
     assert len(rows) == 2
 

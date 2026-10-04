@@ -274,3 +274,83 @@ def test_drain_decodes_bytes_leniently_without_dying():
     assert log[-1] == "last line\n"  # อ่านจนจบ ไม่หลุดกลางทาง
     assert len(log) == 3
     assert "garbage" in log[1]
+
+
+# --- Review #4/#6/#11: cleanup ทุก path, join reader ก่อน parse, log bounded ---
+
+
+def test_start_server_non_object_props_stops_child(monkeypatch):
+    """Review #4: /props คืน JSON ที่ไม่ใช่ object → ต้อง stop child (ไม่ใช่ AttributeError แล้ว leak)"""
+
+    def fake_popen(cmd, **kwargs):
+        return FakeProc(rc=None)
+
+    def fake_http_get(url, **kwargs):
+        if url.endswith("/health"):
+            return (200, "")
+        return (200, "[1, 2]")  # valid JSON แต่ไม่ใช่ object
+
+    stopped: list = []
+    monkeypatch.setattr(llama_runner.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(llama_runner, "_http_get", fake_http_get)
+    monkeypatch.setattr(llama_runner, "stop_server", lambda h, **k: stopped.append(h))
+
+    with pytest.raises(config.CompressionError) as exc:
+        llama_runner.start_server(Path("/tmp/m.gguf"), port=18087)
+
+    assert "different model" in str(exc.value)  # fall เข้า alias-mismatch path (English)
+    assert len(stopped) == 1
+
+
+def test_start_server_unexpected_error_after_ready_stops_child(monkeypatch):
+    """Review #4: path ไหนหลัง spawn ที่ raise นอกเหนือจาก CompressionError ก็ต้อง cleanup"""
+
+    def fake_popen(cmd, **kwargs):
+        return FakeProc(rc=None)
+
+    def fake_http_get(url, **kwargs):
+        if url.endswith("/health"):
+            return (200, "")
+        raise RuntimeError("unexpected boom")  # /props ระเบิดแบบไม่คาดคิด
+
+    stopped: list = []
+    monkeypatch.setattr(llama_runner.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(llama_runner, "_http_get", fake_http_get)
+    monkeypatch.setattr(llama_runner, "stop_server", lambda h, **k: stopped.append(h))
+
+    with pytest.raises(RuntimeError):
+        llama_runner.start_server(Path("/tmp/m.gguf"), port=18088)
+
+    assert len(stopped) == 1  # ไม่ leak ไม่ว่า exception อะไร
+
+
+def test_stop_server_joins_log_reader():
+    """Review #6: stop ต้องรอ reader จบก่อนคืน — caller จะได้ parse log ครบทุกบรรทัด"""
+    joined: dict = {}
+
+    class FakeReader:
+        def join(self, timeout=None):
+            joined["timeout"] = timeout
+
+    handle = ServerHandle(
+        proc=FakeProc(rc=0), url="http://127.0.0.1:9", alias="x"
+    )
+    handle._reader = FakeReader()
+
+    llama_runner.stop_server(handle)  # child ตายแล้ว — เดิม return ก่อน join
+
+    assert joined.get("timeout") is not None
+
+
+def test_server_log_is_bounded():
+    """Review #11: serve เปิดค้าง — log ต้อง bounded (deque) ไม่โตไม่จำกัด"""
+    handle = ServerHandle(
+        proc=FakeProc(rc=0), url="http://127.0.0.1:9", alias="x"
+    )
+    total = llama_runner.LOG_MAX_LINES + 50
+    for i in range(total):
+        handle._log.append(f"L{i}\n")
+
+    assert len(handle._log) == llama_runner.LOG_MAX_LINES
+    assert handle.log_text.endswith(f"L{total - 1}\n")  # ท้ายอยู่
+    assert "L0\n" not in handle.log_text  # หัวหลุดออก

@@ -15,6 +15,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,6 +23,9 @@ from core.compression import CompressionError
 from core.compression.config import device_args, require_tools, tool_path
 
 _KV_RE = re.compile(r"llama_kv_cache:\s+size\s*=\s*([\d.]+)\s*MiB")
+
+# บรรทัด log สูงสุดที่เก็บในหน่วยความจำ — serve เปิดค้างได้ไม่จำกัด → ห้ามโตไม่จำกัด (Review #11)
+LOG_MAX_LINES = 20_000
 
 
 def find_free_port() -> int:
@@ -71,7 +75,9 @@ class ServerHandle:
     proc: subprocess.Popen
     url: str
     alias: str
-    _log: list[str] = field(default_factory=list, repr=False)
+    _log: deque = field(
+        default_factory=lambda: deque(maxlen=LOG_MAX_LINES), repr=False
+    )
     _reader: threading.Thread | None = field(default=None, repr=False)
 
     @property
@@ -139,7 +145,6 @@ def start_server(
                 break
             time.sleep(0.15)
         if not ready:
-            stop_server(handle)
             raise CompressionError(
                 f"llama-server did not become ready in {timeout}s: "
                 f"{_log_tail(handle.log_text)}"
@@ -149,35 +154,47 @@ def start_server(
         served_alias = None
         if status == 200 and body:
             try:
-                served_alias = json.loads(body).get("model_alias")
+                data = json.loads(body)
             except json.JSONDecodeError:
-                served_alias = None
+                data = None
+            # ต้องเป็น object ถึงจะ .get ได้ — valid JSON แบบอื่น (list/str) = ไม่รู้จัก (Review #4)
+            if isinstance(data, dict):
+                served_alias = data.get("model_alias")
         if served_alias != alias:
-            stop_server(handle)
             raise CompressionError(
                 f"port {port} is serving a different model (expected {alias}). "
                 "Try another --port."
             )
-    except KeyboardInterrupt:
-        stop_server(handle)  # Review Focus #3: Ctrl+C ระหว่าง start — ห้าม leak child
+    except BaseException:
+        # path ไหนหลัง spawn (รวม Ctrl+C / exception ไม่คาดคิด) = stop ก่อน propagate
+        # — จุดเดียวจบ ไม่ leak child (Review #4)
+        stop_server(handle)
         raise
     return handle
 
 
 def stop_server(handle: ServerHandle, *, timeout: float = 10.0) -> None:
-    """SIGINT → รอปิดจริง → ไม่ทันค่อย kill (llama-server ปิด graceful เอง)"""
+    """SIGINT → รอปิดจริง → ไม่ทันค่อย kill (llama-server ปิด graceful เอง)
+
+    join reader ทุก path (finally) — caller parse `log_text` หลัง stop จะได้ครบทุกบรรทัด (Review #6)
+    """
     proc = handle.proc
-    if proc.poll() is not None:
-        return
-    proc.send_signal(signal.SIGINT)
     try:
-        proc.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        proc.kill()
+        if proc.poll() is not None:
+            return
+        proc.send_signal(signal.SIGINT)
         try:
-            proc.wait(timeout=5)
+            proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            pass
+            proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+    finally:
+        if handle._reader is not None:
+            # child ตายแล้ว → stdout EOF → reader จบ — กันเคสค้างด้วย timeout
+            handle._reader.join(timeout=timeout)
 
 
 def kv_cache_mb(log_text: str) -> float | None:

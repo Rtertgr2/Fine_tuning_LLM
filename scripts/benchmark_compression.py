@@ -158,8 +158,8 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
                     cases, handle, tokenizer=tokenizer, fim_tokens=fim_tokens
                 )
             finally:
+                stop_server(handle)  # stop = join reader ในตัว (log ครบ — Review #6)
                 kv = kv_cache_mb(handle.log_text)
-                stop_server(handle)
 
         latency = None
         if eval_result is not None:
