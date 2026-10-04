@@ -51,12 +51,14 @@ def test_build_report_schema_keys():
         "peak_vram_mb",
         "kv_cache_mb",
         "tokens_per_sec",
+        "prompt_tokens_per_sec",  # Review #8: pp rate เก็บแยกจาก gen
         "latency_ms",
         "load_time_ms",
         "exact_match_pct",
         "token_f1",
         "syntax_pass_rate",
         "execution_pass_rate",
+        "eval",  # Review #2: identity ของการทดสอบ (None เมื่อ --no-eval)
         "timestamp",
     }
     assert expected <= set(r)

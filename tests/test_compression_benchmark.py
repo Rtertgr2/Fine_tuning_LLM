@@ -139,12 +139,11 @@ def test_sample_memory_vram_none_when_parse_fails(monkeypatch):
 def test_run_bench_nonzero_exit_raises(monkeypatch):
     class FakeProc:
         pid = 99999999  # /proc ไม่มี → sample_memory คืน None ทั้งคู่ (ไม่ crash)
+        stdout = iter(())  # drain contract: stream ไม่ใช่ communicate()
+        stderr = iter(("bench exploded\n",))
 
         def poll(self):
             return 1  # rc=1 ทันที
-
-        def communicate(self):
-            return ("", "bench exploded")
 
     monkeypatch.setattr(benchmark.subprocess, "Popen", lambda *a, **k: FakeProc())
 
@@ -175,3 +174,39 @@ def test_run_bench_real_artifact():
     assert metrics["prompt_tps"] is not None and metrics["prompt_tps"] > 0
     assert metrics["gen_tps"] is not None and metrics["gen_tps"] > 0
     assert set(metrics) >= {"prompt_tps", "gen_tps", "load_ms", "peak_rss_mb", "peak_vram_mb"}
+
+
+def test_run_bench_drains_stderr_while_running(monkeypatch, tmp_path):
+    """Review #13: child เขียน stderr เต็ม pipe (64KB) → ถ้าไม่ drain ระหว่างรอ = deadlock"""
+    import threading
+
+    tools = tmp_path / "tools"
+    bin_dir = tools / "build" / "bin"
+    bin_dir.mkdir(parents=True)
+    fake = bin_dir / "llama-bench"
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        "head -c 200000 /dev/zero >&2\n"  # เกิน 64KB pipe buffer → เต็มถ้าไม่อ่าน
+        "echo '[{\"n_prompt\": 512, \"n_gen\": 0, \"avg_ts\": 100.0}, "
+        "{\"n_prompt\": 0, \"n_gen\": 128, \"avg_ts\": 50.0}]'\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    monkeypatch.setenv("LLAMA_CPP_DIR", str(tools))
+
+    result: dict = {}
+
+    def run():
+        try:
+            result["out"] = benchmark.run_bench(Path("/tmp/x.gguf"), device="cpu")
+        except Exception as exc:  # noqa: BLE001 — จับให้ test เห็น error ชัด ๆ
+            result["err"] = exc
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(timeout=20)
+
+    assert not t.is_alive(), "run_bench hung on full stderr pipe (Review #13)"
+    assert "err" not in result, result.get("err")
+    assert result["out"]["prompt_tps"] == 100.0
+    assert result["out"]["gen_tps"] == 50.0

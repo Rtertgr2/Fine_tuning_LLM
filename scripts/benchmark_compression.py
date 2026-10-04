@@ -41,8 +41,12 @@ from core.compression.report import (
     write_report,
 )
 from core.estimator import ModelSpecUnavailable, resolve_model_spec
-from core.evaluator import build_eval_cases
+from core.evaluator import EVAL_MAX_NEW_TOKENS, build_eval_cases
 from core.trainer_worker import AutoTokenizer
+
+# กันชน token พิเศษของ FIM prompt ที่อยู่เหนือ input budget (วัดจริง ≤6 โทเคน) —
+# server ctx ต้องครอบคลุม theoretical worst (budget + specials + EVAL_MAX_NEW_TOKENS) เสมอ
+FIM_PROMPT_MARGIN: int = 16
 
 
 def parse_variants(raw: str) -> tuple[str, ...]:
@@ -109,18 +113,31 @@ def _load_fim(fim_key: str) -> dict:
     return registry[fim_key]
 
 
-def _baseline_dict(args: argparse.Namespace, source: Path) -> dict | None:
+def _baseline_dict(
+    args: argparse.Namespace, source: Path, built_cases: int | None
+) -> dict | None:
     path = Path(args.baseline) if args.baseline else pick_baseline(args.model, source)
     if path is None or not path.is_file():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        baseline = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         print(
             f"warning: baseline is not valid JSON: {path} — continuing without baseline",
             file=sys.stderr,
         )
         return None
+    if built_cases is None:
+        return baseline  # --no-eval: ไม่มี metrics ปัจจุบัน → delta ไม่ถูกแสดงอยู่ดี
+    if baseline.get("n") == built_cases:
+        return baseline
+    # Review #2: จำนวนเคสไม่ตรง = คนละการทดสอบ → ห้ามเทียบ (ตรง convention eval.py --compare)
+    print(
+        f"note: baseline skipped (case count differs: baseline n={baseline.get('n')!r}, "
+        f"run n={built_cases}) — deltas require the same evaluation",
+        file=sys.stderr,
+    )
+    return None
 
 
 def run_benchmark(args: argparse.Namespace) -> list[dict]:
@@ -128,10 +145,16 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
     source = resolve_source(args.model)
     require_tools()
     parameter_count = _parameter_count(args.model)
+    # Review #7: server ต้องรันด้วย context ที่รายงาน = input budget (args.context =
+    # MAX_SEQ_LENGTH_DEFAULT ที่ build_eval_cases ใช้ truncate) + gen headroom เท่า HF eval
+    # (EVAL_MAX_NEW_TOKENS) + margin กันชน FIM specials (prompt เหนือ budget วัดจริง ≤6 โทเคน;
+    # theoretical worst 1024+6+256 = 1286 ต้อง ≤ ค่านี้) → ทุกเคส fit เท่า baseline
+    server_ctx = args.context + EVAL_MAX_NEW_TOKENS + FIM_PROMPT_MARGIN
 
     tokenizer = None
     fim_tokens = None
     cases: list = []
+    eval_identity = None
     if not args.no_eval:
         fim_tokens = _load_fim(args.fim_key)
         tokenizer = AutoTokenizer.from_pretrained(str(source))
@@ -143,6 +166,20 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
             n_cases=args.eval_cases,
             max_seq_length=args.context,
         )
+        if not cases:
+            # Review #10: ห้ามรายงาน 0.0 ดูเหมือน score ที่วัดได้จริง → fail fast ก่อน start server
+            raise CompressionError(
+                "no eval cases built (dataset exhausted or --eval-cases 0) — "
+                "use --no-eval to skip evaluation."
+            )
+        eval_identity = {
+            "dataset_id": args.dataset,
+            "dataset_column": args.column,
+            "limit": args.limit,
+            "requested_cases": args.eval_cases,
+            "built_cases": len(cases),
+            "fim_key": args.fim_key,
+        }
 
     rows: list[dict] = []
     for variant in args.variants:
@@ -152,14 +189,16 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
         kv = None
         eval_result = None
         if not args.no_eval:
-            handle = start_server(gguf, device=args.device)
+            handle = start_server(gguf, device=args.device, ctx_size=server_ctx)
+            # eager parse ก่อน eval — วัดจริง eval 100 เคส ≈ 319k บรรทัด (3,156/เคส)
+            # ≫ LOG_MAX_LINES → รอจนหลัง stop = startup kv line ถูก deque evict → None
+            kv = kv_cache_mb(handle.log_text)
             try:
                 eval_result = evaluate_with_llama(
                     cases, handle, tokenizer=tokenizer, fim_tokens=fim_tokens
                 )
             finally:
-                kv = kv_cache_mb(handle.log_text)
-                stop_server(handle)
+                stop_server(handle)  # stop = join reader ในตัว (log ครบ — Review #6)
 
         latency = None
         if eval_result is not None:
@@ -172,20 +211,24 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
             backend=f"llama.cpp-{args.device}",
             weight_bits=VARIANT_BITS[variant],
             parameter_count=parameter_count,
-            context_tokens=args.context,
+            context_tokens=server_ctx,  # reported = applied (Review #7)
             model_disk_mb=gguf.stat().st_size / (1024 * 1024),
-            tokens_per_sec=bench["prompt_tps"],
+            tokens_per_sec=bench["gen_tps"],  # Review #8: headline = decode rate
+            prompt_tokens_per_sec=bench["prompt_tps"],  # pp เก็บแยก (อย่าเอา pp มาเป็น TPS)
             latency_ms=latency,
             load_time_ms=bench["load_ms"],
             peak_vram_mb=bench["peak_vram_mb"],
             kv_cache_mb=kv,
             exact_match_pct=eval_result["exact_match_pct"] if eval_result else None,
             token_f1=eval_result["token_f1_mean"] if eval_result else None,
+            eval_identity=eval_identity,
         )
         rows.append(report)
         write_report(report, report_path(source, variant))
 
-    baseline = _baseline_dict(args, source)
+    baseline = _baseline_dict(
+        args, source, None if args.no_eval else len(cases)
+    )  # Review #2: เทียบก็ต่อเมื่อจำนวนเคสตรงกัน
     print(format_table(rows, baseline))
     return rows
 

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -18,11 +19,15 @@ DEFAULT_VARIANTS: tuple[str, ...] = ("fp16", "q8_0", "q4_k_m")
 QUANT_TYPE: dict[str, str] = {"q8_0": "Q8_0", "q4_k_m": "Q4_K_M"}
 VARIANT_BITS: dict[str, int] = {"fp16": 16, "q8_0": 8, "q4_k_m": 4}
 
+# repo root จากตำแหน่งไฟล์นี้ (core/compression/config.py → ขึ้น 2 ชั้น) — ตรงกับที่
+# setup_llamacpp.sh ติดตั้ง (`$0/..`) เรียก CLI จาก directory อื่นก็หา tools เจอ (Review #5)
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 def tools_dir() -> Path:
-    """โฟลเดอร์รากของ llama.cpp checkout/build (env override → default)"""
+    """โฟลเดอร์รากของ llama.cpp checkout/build (env override → default = repo root)"""
     env = os.environ.get("LLAMA_CPP_DIR")
-    return Path(env) if env else Path("tools/llama.cpp")
+    return Path(env) if env else _REPO_ROOT / "tools" / "llama.cpp"
 
 
 def tool_path(name: str) -> Path:
@@ -93,5 +98,14 @@ def artifact_path(source: Path, variant: str) -> Path:
     return gguf_dir(source) / f"{source.name}-{variant}.gguf"
 
 
+def report_id(source: Path) -> str:
+    """identity ของ report: basename + hash8 ของ resolved path — source คนละที่ชื่อเดียวกัน
+
+    ต้องไม่เขียนทับกัน (Review #3)
+    """
+    digest = hashlib.sha256(str(source.resolve()).encode("utf-8")).hexdigest()[:8]
+    return f"{source.name}-{digest}"
+
+
 def report_path(source: Path, variant: str) -> Path:
-    return Path("benchmarks") / source.name / f"{variant}.json"
+    return Path("benchmarks") / report_id(source) / f"{variant}.json"

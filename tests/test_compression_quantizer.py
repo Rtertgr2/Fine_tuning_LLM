@@ -48,6 +48,7 @@ def test_build_artifacts_reuses_existing_fp16(monkeypatch, tmp_path):
     src = _src(tmp_path)
     (src / "gguf" / "m-fp16.gguf").parent.mkdir(parents=True)
     (src / "gguf" / "m-fp16.gguf").write_bytes(b"x")  # fp16 มีแล้ว → ห้าม convert ซ้ำ
+    quantizer.write_meta(src / "gguf" / "m-fp16.gguf", src)  # sidecar = fresh
 
     quantizer.build_artifacts(src, ("fp16", "q8_0", "q4_k_m"))
 
@@ -98,6 +99,8 @@ def test_quantize_reuses_existing_artifact(monkeypatch, tmp_path):
     gguf.mkdir()
     (gguf / "m-fp16.gguf").write_bytes(b"x")
     (gguf / "m-q4_k_m.gguf").write_bytes(b"x")  # ตัวนี้มีแล้ว
+    quantizer.write_meta(gguf / "m-fp16.gguf", src)  # sidecar = fresh ทั้งคู่
+    quantizer.write_meta(gguf / "m-q4_k_m.gguf", src)
 
     out = quantizer.build_artifacts(src, ("fp16", "q4_k_m", "q8_0"))
 
@@ -121,3 +124,99 @@ def test_build_artifacts_real_qwen_smoke():
     fp16, q4 = out
     assert fp16.is_file() and q4.is_file()
     assert q4.stat().st_size < fp16.stat().st_size
+
+
+# --- Review #1 + #9: freshness fingerprint (sidecar) + atomic write ---
+
+
+def _fake_writing_run(monkeypatch, calls: list) -> None:
+    """run_cmd จำลอง tool เขียนไฟล์จริงตาม path ใน cmd (แบบ atomic tmp) แล้วสำเร็จ"""
+
+    def fake_run(cmd):
+        calls.append(cmd)
+        _outfile_of(cmd).write_bytes(b"GGUF-DATA")
+        return "ok"
+
+    monkeypatch.setattr(quantizer, "run_cmd", fake_run)
+
+
+def _outfile_of(cmd: list[str]) -> Path:
+    if "--outfile" in cmd:  # convert: ... --outfile <path> --outtype f16
+        return Path(cmd[cmd.index("--outfile") + 1])
+    return Path(cmd[2])  # quantize: [tool, fp16, out, TYPE]
+
+
+def test_reuse_requires_matching_fingerprint(monkeypatch, tmp_path):
+    calls: list = []
+    _fake_writing_run(monkeypatch, calls)
+    src = _src(tmp_path)
+
+    quantizer.build_artifacts(src, ("fp16", "q4_k_m"))
+    first = len(calls)
+    quantizer.build_artifacts(src, ("fp16", "q4_k_m"))  # source ไม่เปลี่ยน → reuse
+
+    assert len(calls) == first  # ไม่มี subprocess ใหม่ (sidecar ตรง)
+
+
+def test_rebuild_when_source_changed(monkeypatch, tmp_path):
+    calls: list = []
+    _fake_writing_run(monkeypatch, calls)
+    src = _src(tmp_path)
+    quantizer.build_artifacts(src, ("fp16", "q4_k_m"))
+    first = len(calls)
+
+    (src / "config.json").write_text('{"changed": true}', encoding="utf-8")  # size ต่าง
+
+    quantizer.build_artifacts(src, ("fp16", "q4_k_m"))
+
+    assert len(calls) > first  # ต้อง rebuild ทั้ง fp16 และ q4 (artifact เก่าใช้ไม่ได้)
+
+
+def test_rebuild_when_sidecar_missing(monkeypatch, tmp_path):
+    calls: list = []
+    _fake_writing_run(monkeypatch, calls)
+    src = _src(tmp_path)
+    quantizer.build_artifacts(src, ("fp16",))
+    first = len(calls)
+
+    quantizer.artifact_path(src, "fp16").with_name(
+        quantizer.artifact_path(src, "fp16").name + ".srcmeta.json"
+    ).unlink()  # legacy artifact ไม่มี sidecar → ถือว่า stale
+
+    quantizer.build_artifacts(src, ("fp16",))
+
+    assert len(calls) > first
+
+
+def test_convert_failure_leaves_no_partial_or_artifact(monkeypatch, tmp_path):
+    def failing_run(cmd):
+        _outfile_of(cmd).write_bytes(b"PARTIAL")  # tool เขียนครึ่ง ๆ กลาง ๆ แล้ว fail
+        raise subprocess.CalledProcessError(1, cmd, output="", stderr="boom")
+
+    monkeypatch.setattr(quantizer, "run_cmd", failing_run)
+    src = _src(tmp_path)
+
+    with pytest.raises(config.CompressionError):
+        quantizer.build_artifacts(src, ("fp16",))
+
+    assert not quantizer.artifact_path(src, "fp16").is_file()  # เศษไฟล์ห้ามค้าง
+    assert list((src / "gguf").glob("*.partial")) == []
+
+
+def test_quantize_failure_leaves_no_partial_or_artifact(monkeypatch, tmp_path):
+    calls: list = []
+    _fake_writing_run(monkeypatch, calls)
+    src = _src(tmp_path)
+    quantizer.build_artifacts(src, ("fp16",))  # fp16 พร้อม (มี sidecar)
+
+    def failing_run(cmd):
+        _outfile_of(cmd).write_bytes(b"PARTIAL")
+        raise subprocess.CalledProcessError(1, cmd, output="", stderr="q boom")
+
+    monkeypatch.setattr(quantizer, "run_cmd", failing_run)
+
+    with pytest.raises(config.CompressionError):
+        quantizer.build_artifacts(src, ("q8_0",))
+
+    assert not quantizer.artifact_path(src, "q8_0").is_file()
+    assert list((src / "gguf").glob("*.partial")) == []

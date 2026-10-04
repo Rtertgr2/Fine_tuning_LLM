@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core.compression import CompressionError
 from core.compression.config import artifact_path, resolve_source
-from core.compression.llama_runner import start_server, stop_server
+from core.compression.llama_runner import _log_tail, start_server, stop_server
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -66,18 +66,30 @@ def serve(
     start=start_server,
     stop=stop_server,
 ) -> int:
-    """เปิด server → พิมพ์ URL → รอจนถูกขัดจังหวะ → stop จริง → คืน 0"""
+    """เปิด server → พิมพ์ URL → รอจนจบ → stop จริง
+
+    - ถูกขัดจังหวะ (Ctrl+C/SIGTERM) → "Server stopped." + คืน 0 (ปกติ)
+    - server ตายเอง → rc + log tail ไป stderr + คืน 1 (Review #12)
+    """
     try:
         handle = start(gguf, port=port, device=device)
     except CompressionError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     print(f"Server ready: {handle.url} (model: {handle.alias})", flush=True)
+    interrupted = False
+    rc = None
     try:
-        handle.proc.wait()
+        rc = handle.proc.wait()
     except KeyboardInterrupt:
-        pass
+        interrupted = True
     stop(handle)
+    if not interrupted:
+        # Review #12: ตายเอง (crash/device loss) ≠ user stop → ต้องบอกผู้ใช้
+        # พร้อม rc + log tail แล้วคืน 1 (ห้ามรายงานว่าหยุดปกติ)
+        print(f"llama-server exited unexpectedly (rc={rc}).", file=sys.stderr)
+        print(_log_tail(handle.log_text), file=sys.stderr)
+        return 1
     print("Server stopped.", flush=True)
     return 0
 

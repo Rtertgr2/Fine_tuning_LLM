@@ -6,6 +6,7 @@ import json
 import re
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -98,9 +99,16 @@ def sample_memory(pid: int) -> dict:
     }
 
 
+def _drain_text(stream, buf: list[str]) -> None:
+    """อ่านบรรทัดจน EOF ใส่ buf (reader thread — เรียกจาก thread เท่านั้น)"""
+    buf.extend(stream)
+
+
 def run_bench(gguf: Path, *, device: str = "vulkan") -> dict:
     """รัน `llama-bench -m <gguf> -o json` + poll memory ทุก 100ms (เก็บ max)
 
+    stdout/stderr ถูก drain ตลอดเวลาด้วย reader thread — ห้ามรออ่านหลังจบ
+    (pipe 64KB เต็ม → child block เอง = deadlock — Review #13);
     rc != 0 → CompressionError + log tail (English เสมอ)
     """
     cmd = [str(tool_path("llama-bench")), "-m", str(gguf), "-o", "json"]
@@ -113,6 +121,17 @@ def run_bench(gguf: Path, *, device: str = "vulkan") -> dict:
         errors="replace",
     )
 
+    out_lines: list[str] = []
+    err_lines: list[str] = []
+    readers: list[threading.Thread] = []
+    for stream, buf in ((proc.stdout, out_lines), (proc.stderr, err_lines)):
+        if stream is not None:
+            thread = threading.Thread(
+                target=_drain_text, args=(stream, buf), daemon=True
+            )
+            thread.start()
+            readers.append(thread)
+
     peak: dict = {"peak_rss_mb": None, "peak_vram_mb": None}
     while (rc := proc.poll()) is None:
         for key, value in sample_memory(proc.pid).items():
@@ -120,7 +139,10 @@ def run_bench(gguf: Path, *, device: str = "vulkan") -> dict:
                 peak[key] = value
         time.sleep(0.1)
 
-    stdout, stderr = proc.communicate()
+    # child ตายแล้ว → EOF → thread จบ (timeout กันค้างแบบไม่ปกติ)
+    for thread in readers:
+        thread.join(timeout=10)
+    stdout, stderr = "".join(out_lines), "".join(err_lines)
     if rc != 0:
         text = ((stderr or "") + (stdout or "")).splitlines()
         tail = "\n".join(text[-15:]) or "(no output)"

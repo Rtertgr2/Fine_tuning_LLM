@@ -18,7 +18,10 @@ def test_tools_dir_env_override(monkeypatch, tmp_path):
 
 def test_tools_dir_default(monkeypatch):
     monkeypatch.delenv("LLAMA_CPP_DIR", raising=False)
-    assert config.tools_dir() == Path("tools/llama.cpp")
+    default = config.tools_dir()
+    # Review #5: default ต้องอิง repo root (ตรง setup script) ไม่ใช่ CWD
+    assert default.is_absolute()
+    assert default == Path(config.__file__).resolve().parents[2] / "tools" / "llama.cpp"
 
 
 def test_require_tools_missing_raises_english(monkeypatch, tmp_path):
@@ -55,7 +58,25 @@ def test_artifact_paths_layout(tmp_path):
     src = tmp_path / "m"
     assert config.gguf_dir(src) == src / "gguf"
     assert config.artifact_path(src, "q4_k_m") == src / "gguf" / "m-q4_k_m.gguf"
-    assert config.report_path(src, "q8_0") == Path("benchmarks/m/q8_0.json")
+    p = config.report_path(src, "q8_0")
+    assert p.parent.parent == Path("benchmarks")
+    assert p.name == "q8_0.json"
+    assert p.parent.name.startswith("m")  # ยังอ่านออกว่ามาจากชื่อไหน
+
+
+def test_report_path_disambiguates_same_basename(tmp_path):
+    """Review #3: basename เดียวกันคนละที่ → report คนละไฟล์ (ไม่เขียนทับกัน)"""
+    a = tmp_path / "a" / "m"
+    b = tmp_path / "b" / "m"
+    a.mkdir(parents=True)
+    b.mkdir(parents=True)
+
+    pa = config.report_path(a, "q8_0")
+    pb = config.report_path(b, "q8_0")
+
+    assert pa != pb
+    assert config.report_path(a, "q8_0") == pa  # deterministic
+    assert pa != config.report_path(a, "q4_k_m")  # variant แยกกัน
 
 
 def test_device_args_vulkan_is_empty_and_cpu_is_not():

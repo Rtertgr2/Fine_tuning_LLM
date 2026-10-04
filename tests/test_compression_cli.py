@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.compression.config import DEFAULT_VARIANTS
+from core.evaluator import EVAL_MAX_NEW_TOKENS
 
 CLI_PATH = Path(__file__).resolve().parents[1] / "scripts" / "benchmark_compression.py"
 
@@ -77,6 +78,9 @@ def _wire(cli, monkeypatch, tmp_path, calls: list[str], reports: list[dict]):
     monkeypatch.setattr(
         cli, "stop_server", lambda h, **k: calls.append("server.stop")
     )
+    monkeypatch.setattr(
+        cli, "kv_cache_mb", lambda text: calls.append("kv") or None
+    )  # Review #6: ต้องถูกเรียกหลัง stop (log ครบแล้ว)
 
     real_write = cli.write_report
 
@@ -123,7 +127,15 @@ def test_run_benchmark_orchestration_order(monkeypatch, tmp_path):
     )
     rows = cli.run_benchmark(args)
 
-    per_variant = ["artifact", "bench", "server.start", "eval", "server.stop", "report"]
+    per_variant = [
+        "artifact",
+        "bench",
+        "server.start",
+        "kv",  # eager: parse ก่อน eval — volume จริง 100 เคส ≈ 319k บรรทัด > LOG_MAX_LINES
+        "eval",
+        "server.stop",
+        "report",
+    ]
     assert calls == per_variant * 2
     assert len(rows) == 2
 
@@ -155,7 +167,8 @@ def test_table_printed_with_baseline_delta(monkeypatch, tmp_path, capsys):
 
     baseline_path = tmp_path / "baseline.json"
     baseline_path.write_text(
-        json.dumps({"exact_match_pct": 10.0, "token_f1_mean": 0.5}), encoding="utf-8"
+        json.dumps({"exact_match_pct": 10.0, "token_f1_mean": 0.5, "n": 100}),
+        encoding="utf-8",
     )
     captured: dict = {}
     monkeypatch.setattr(
@@ -170,7 +183,7 @@ def test_table_printed_with_baseline_delta(monkeypatch, tmp_path, capsys):
     )
     cli.run_benchmark(args)
 
-    assert captured["baseline"] == {"exact_match_pct": 10.0, "token_f1_mean": 0.5}
+    assert captured["baseline"] == {"exact_match_pct": 10.0, "token_f1_mean": 0.5, "n": 100}
     assert len(captured["rows"]) == 1
     assert "TABLE-SENTINEL" in capsys.readouterr().out  # print เกิดจริง
 
@@ -257,3 +270,145 @@ def test_compression_pipeline_e2e(monkeypatch, tmp_path):
         assert row["exact_match_pct"] is not None  # eval รันจริง
         assert row["syntax_pass_rate"] is None and row["execution_pass_rate"] is None
     assert rows[1]["model_disk_mb"] < rows[0]["model_disk_mb"]
+
+
+# --- Review #2 + #10: eval identity + empty cases guard ---
+
+
+def test_empty_eval_cases_errors_before_server(monkeypatch, tmp_path, capsys):
+    """Review #10: build_eval_cases ว่าง (dataset หมด / --eval-cases 0) → error ก่อน start server
+
+    ห้ามรายงาน 0.0 ดูเหมือน score ที่วัดได้จริง
+    """
+    cli = _load_cli()
+    calls: list[str] = []
+    reports: list[dict] = []
+    _wire(cli, monkeypatch, tmp_path, calls, reports)
+    monkeypatch.setattr(cli, "build_eval_cases", lambda **k: [])
+
+    rc = cli.main(["--model", "m", "--variants", "fp16"])
+
+    assert rc == 1
+    assert "no eval cases" in capsys.readouterr().err
+    assert calls == []  # ไม่ build/ไม่ start server อะไรเลย (fail fast)
+
+
+def test_report_persists_eval_identity(monkeypatch, tmp_path):
+    """Review #2: report ต้องเก็บ identity ของ eval (dataset/column/limit/cases/fim)"""
+    cli = _load_cli()
+    calls: list[str] = []
+    reports: list[dict] = []
+    _wire(cli, monkeypatch, tmp_path, calls, reports)
+
+    args = cli.build_parser().parse_args(
+        ["--model", "m", "--variants", "fp16", "--eval-cases", "7"]
+    )
+    cli.run_benchmark(args)
+
+    identity = reports[0]["eval"]
+    assert identity["built_cases"] == 7
+    assert identity["requested_cases"] == 7
+    assert identity["dataset_id"] == args.dataset
+    assert identity["dataset_column"] == args.column
+    assert identity["limit"] == args.limit
+    assert identity["fim_key"] == args.fim_key
+
+
+def test_delta_omitted_when_case_count_differs(monkeypatch, tmp_path, capsys):
+    """Review #2: baseline คนละจำนวนเคส → ห้ามแสดง delta (คนละการทดสอบ)"""
+    cli = _load_cli()
+    calls: list[str] = []
+    reports: list[dict] = []
+    _wire(cli, monkeypatch, tmp_path, calls, reports)
+
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text(
+        json.dumps({"exact_match_pct": 10.0, "token_f1_mean": 0.5, "n": 50}),
+        encoding="utf-8",
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        cli,
+        "format_table",
+        lambda rows, baseline=None: captured.update(baseline=baseline) or "T",
+    )
+
+    args = cli.build_parser().parse_args(
+        ["--model", "m", "--variants", "fp16", "--baseline", str(baseline_path)]
+    )  # eval เปิด → build_eval_cases fake คืน 100 เคส (n_cases default)
+    cli.run_benchmark(args)
+
+    assert captured["baseline"] is None
+    err = capsys.readouterr().err
+    assert "baseline skipped" in err and "case count" in err  # note เป็นอังกฤษ
+
+
+def test_delta_shown_when_case_count_matches(monkeypatch, tmp_path):
+    """equivalent (n ตรงกัน) → delta ผ่านเข้าไปใน format_table"""
+    cli = _load_cli()
+    calls: list[str] = []
+    reports: list[dict] = []
+    _wire(cli, monkeypatch, tmp_path, calls, reports)
+
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text(
+        json.dumps({"exact_match_pct": 10.0, "token_f1_mean": 0.5, "n": 100}),
+        encoding="utf-8",
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        cli,
+        "format_table",
+        lambda rows, baseline=None: captured.update(baseline=baseline) or "T",
+    )
+
+    args = cli.build_parser().parse_args(
+        ["--model", "m", "--variants", "fp16", "--baseline", str(baseline_path)]
+    )
+    cli.run_benchmark(args)
+
+    assert captured["baseline"]["exact_match_pct"] == 10.0
+
+
+def test_start_server_receives_context_arg(monkeypatch, tmp_path):
+    """Review #7: CLI ต้องส่ง ctx ให้ server = ค่าที่รายงาน (input budget + gen headroom + margin)
+
+    headroom = EVAL_MAX_NEW_TOKENS + FIM_PROMPT_MARGIN — default args.context=1024
+    (MAX_SEQ_LENGTH_DEFAULT): prompt ≤ ~1027 (budget+FIM specials) + middle ≤ 256
+    → theoretical worst 1286 ≤ 1296 ทุกเคส fit เท่า HF baseline
+    """
+    cli = _load_cli()
+    calls: list[str] = []
+    reports: list[dict] = []
+    _wire(cli, monkeypatch, tmp_path, calls, reports)
+    captured_kwargs: dict = {}
+    fake_handle = SimpleNamespace(
+        url="http://127.0.0.1:18080", alias="x", proc=None, log_text="", _reader=None
+    )
+    monkeypatch.setattr(
+        cli,
+        "start_server",
+        lambda g, **k: captured_kwargs.update(k) or fake_handle,
+    )
+
+    args = cli.build_parser().parse_args(["--model", "m", "--variants", "fp16"])
+    cli.run_benchmark(args)
+
+    expected_ctx = args.context + EVAL_MAX_NEW_TOKENS + cli.FIM_PROMPT_MARGIN
+    assert captured_kwargs.get("ctx_size") == expected_ctx
+    assert reports[0]["context_tokens"] == expected_ctx  # reported = applied
+
+
+def test_tokens_per_sec_maps_generation_rate(monkeypatch, tmp_path):
+    """Review #8: tokens_per_sec = gen rate (ไม่ใช่ prompt rate — ค่าเก่า overstate ~36x)"""
+    cli = _load_cli()
+    calls: list[str] = []
+    reports: list[dict] = []
+    _wire(cli, monkeypatch, tmp_path, calls, reports)
+
+    args = cli.build_parser().parse_args(["--model", "m", "--variants", "fp16"])
+    cli.run_benchmark(args)
+
+    row = reports[0]
+    assert row["tokens_per_sec"] == 50  # gen_tps (fake bench)
+    assert row["prompt_tokens_per_sec"] == 100  # pp เก็บแยก field
