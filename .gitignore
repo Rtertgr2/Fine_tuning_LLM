@@ -28,3 +28,10 @@ plan.md
 opencode.json
 skills-lock.json
 .agents/
+/tools/
+# symlink-safe (trailing-slash patterns ไม่ match symlink ใน worktree)
+/models
+/datasets
+/data_cache
+/tools
+/benchmarks

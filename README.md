@@ -118,6 +118,42 @@ Evaluator วัด **FIM Exact Match** + **Token F1** บนชุด held-out 
 .venv/bin/python -m pytest tests/ -m integration -v
 ```
 
+## Compression (GGUF / llama.cpp)
+
+ย่อโมเดลเป็น GGUF รันบน Arc B580 ผ่าน llama.cpp (Vulkan) — standalone CLI ไม่แตะ Gradio app
+(spec: `docs/superpowers/specs/2026-10-03-phase6a-gguf-compression-design.md`,
+roadmap: `docs/roadmaps/2026-10-03-phase6-llm-optimization-roadmap.md` §6)
+
+```bash
+# 1) build llama.cpp (pin commit + Vulkan) — ครั้งแรก ~5-10 นาที
+bash scripts/setup_llamacpp.sh
+
+# 2) สร้าง artifacts + benchmark + eval ในคำสั่งเดียว (fp16 → q8_0 → q4_k_m)
+#    (โมเดลยังไม่มีในเครื่อง → error จะบอกคำสั่ง `hf download ... --local-dir models/<name>` ให้)
+.venv/bin/python scripts/benchmark_compression.py \
+  --model Qwen/Qwen2.5-Coder-0.5B --variants fp16,q8_0,q4_k_m
+
+# ตัวเลือกที่ใช้บ่อย
+--no-eval                     # ข้าม llama-server eval (metrics = null ซื่อสัตย์)
+--device cpu                  # บังคับ CPU (ค่าเริ่ม: vulkan — มีปัญหาเฉพาะ B580 ใช้ fallback นี้)
+--eval-cases 10               # จำนวนเคส eval (ค่าเริ่ม: 100)
+--baseline <path>             # baseline เทียบ delta ในตาราง (ค่าเริ่ม: auto-pick data_cache/eval/)
+
+# 3) เสิร์ฟโมเดลบน local URL (ต่อเครื่องมือข้างนอกได้; Ctrl+C/SIGTERM = หยุดจริง ไม่ leak VRAM)
+.venv/bin/python scripts/serve.py --model Qwen/Qwen2.5-Coder-0.5B --variant q4_k_m
+# → Server ready: http://127.0.0.1:8080 (model: Qwen2.5-Coder-0.5B-q4_k_m)
+```
+
+- **Artifacts**: `<source>/gguf/<name>-<variant>.gguf` — มีอยู่แล้ว reuse ข้ามรอบ (ไม่แปลงซ้ำ)
+- **Reports**: `benchmarks/<model>/<variant>.json` — schema §4 ของ roadmap + ตารางสรุปพิมพ์ใน terminal
+- **Baseline**: โมเดล base → `data_cache/eval/base.json`, source ใต้ `exports/` (merge LoRA) → `finetuned.json`
+  — ตารางพิมพ์ delta (`+x.xx`) ใต้ตัวเลข EM/F1 เทียบ Phase 5
+- **Honest null**: วัดไม่ได้เป็น `null` ไม่ใช่ 0 — `peak_vram_mb` (เครื่องนี้ไม่มี `xpu-smi`),
+  `load_time_ms` (llama-bench รุ่น pin ไม่ emit ค่านี้), `syntax_pass_rate`/`execution_pass_rate`
+  (ยังไม่มี sandbox phase — เป็น `null` เสมอ)
+- **Scope / กติกา**: report-only — ยังไม่ตั้ง quality threshold; runtime เป้า = llama.cpp + GGUF เท่านั้น —
+  **GPTQ / AWQ / bitsandbytes / OpenVINO / HQQ ยังไม่อยู่ใน scope** (roadmap §6.1 main track)
+
 ## โครงสร้างโปรเจค
 
 ```
