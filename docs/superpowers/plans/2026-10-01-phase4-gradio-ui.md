@@ -186,3 +186,8 @@
   - Manual checklist (report ผล): เปิด UI ได้ / Run Environment Check โชว์ gauge+reason / Start training 6 steps จาก UI เห็น plot เดิน + log / Abort กลางทาง → badge Aborted + VRAM คืน / Predict+Merge ถูกล็อกขณะเทรน / ปิด app กลางเทรน → ไม่มี orphan (`pgrep -af trainer_worker` ว่าง)
 - [ ] **Step 4: Full suite — จุดรัน pytest ทีเดียวของทั้ง phase (test-once):** `../../.venv/bin/python -m pytest tests/ -v` → 53 เดิม + ~19 ใหม่ = **72** ทั้งหมดเขียว — fail ตรงไหน debug + รันซ้ำได้ตามปกติจนกว่าจะเขียวหมด
 - [ ] **Step 5: Commit** — `git add app.py tests/ && git commit -m "feat: app.py entry + integration verification"`
+
+## อัปเดตสเปค 2026-10-04 — ML logic review
+
+- `ui/components.build_metric_plot`: รับ list ผสม `metric` + `val_metric` — train series ใช้เฉพาะ dict ที่มี `"loss"` (ลำดับ loss → lr เดิมคงไว้), `val_loss` วาดเป็นจุด marker สีส้ม `#f97316` label `"val_loss"` บนแกน loss (มีเมื่อไหร่วาดเมื่อนั้น)
+- `ui/controller._handle_message`: `mtype in ("metric", "val_metric")` → append เข้า `metrics` (ผ่าน validate ก่อนเหมือนเดิม)
