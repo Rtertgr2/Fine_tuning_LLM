@@ -80,16 +80,19 @@ def build_eval_cases(
     n_cases: int = 100,
     max_seq_length: int = MAX_SEQ_LENGTH_DEFAULT,
     seed: int = SEED,
-) -> list[EvalCase]:
+) -> tuple[list[EvalCase], int]:
     """สร้างชุด eval จาก heldout เท่านั้น — criteria เดียวกับ `build_samples`
 
     - rng ตัวเดียว seed ด้วย `seed` → ผลซ้ำได้
     - middle เกิน `EVAL_MAX_NEW_TOKENS` → ข้าม (คำตอบยาวกว่าที่ model จะ generate)
     - เลิกก่อนครบ `n_cases` ได้ (heldout หมด stream) — คืนเท่าที่มี ไม่ raise
+    - คืน `(cases, skipped_long_middle)` — skipped ต้องรายงาน (เงียบ = EM ถูกอ่าน
+      ว่า representative ทั้งที่ตัดเคส span ยาวทิ้ง)
     """
     codes = iter_codes(dataset_id, dataset_column, limit=limit)
     rng = random.Random(seed)
     cases: list[EvalCase] = []
+    skipped = 0
     for code in codes:
         if not is_heldout(code):
             continue
@@ -97,13 +100,14 @@ def build_eval_cases(
             continue
         prefix, suffix, middle = split_fim(code, rng)
         if len(tokenizer.encode(middle, add_special_tokens=False)) > EVAL_MAX_NEW_TOKENS:
+            skipped += 1
             continue
         suffix = truncate_to_tokens(suffix, tokenizer, max_seq_length // 2)
         prefix = truncate_to_tokens(prefix, tokenizer, max_seq_length - max_seq_length // 2)
         cases.append(EvalCase(prefix=prefix, suffix=suffix, middle=middle))
         if len(cases) >= n_cases:
             break
-    return cases
+    return cases, skipped
 
 
 def evaluate_cases(
@@ -181,7 +185,7 @@ def run_eval(
 
     tokenizer = AutoTokenizer.from_pretrained(config["model_id"])
     ensure_fim_tokens(tokenizer, fim_tokens.values())
-    cases = build_eval_cases(
+    cases, skipped_long_middle = build_eval_cases(
         dataset_id=config["dataset_id"],
         dataset_column=config["dataset_column"],
         limit=config["code_limit"],
@@ -215,6 +219,7 @@ def run_eval(
     result: dict = {
         "mode": mode,
         "n": len(cases),
+        "skipped_long_middle": skipped_long_middle,
         "exact_match_pct": metrics["exact_match_pct"],
         "token_f1_mean": metrics["token_f1_mean"],
         "per_case": metrics["per_case"],

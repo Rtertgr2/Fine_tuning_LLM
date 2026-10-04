@@ -141,7 +141,7 @@ def test_datacache_growth_bounded(capsys):
 
     before = dir_gb("data_cache")
     tokenizer = AutoTokenizer.from_pretrained(DEFAULT_MODEL_ID)
-    cases = ev.build_eval_cases(
+    cases, _skipped = ev.build_eval_cases(
         dataset_id=DEFAULT_DATASET_ID,
         dataset_column=DEFAULT_DATASET_COLUMN,
         limit=512,

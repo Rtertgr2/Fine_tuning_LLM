@@ -1,6 +1,8 @@
 """Tests สำหรับ core/evaluator.py — FIM Exact Match, Token F1, EvalCase (spec §3.2)"""
 
 import dataclasses
+import json
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -112,7 +114,7 @@ def test_build_eval_cases_only_heldout(monkeypatch):
     held = _codes_where(True, 40)
     train = _codes_where(False, 40)
     monkeypatch.setattr(ev, "iter_codes", lambda *a, **k: held + train)
-    cases = ev.build_eval_cases(
+    cases, skipped = ev.build_eval_cases(
         dataset_id="x",
         dataset_column="content",
         limit=80,
@@ -120,6 +122,7 @@ def test_build_eval_cases_only_heldout(monkeypatch):
         n_cases=10,
     )
     assert len(cases) == 10
+    assert skipped == 0  # เคสปกติไม่มีอะไรถูกทิ้ง
     # ทุก middle มาจาก heldout เท่านั้น — middle มีเลข nonce ของ code ต้นทางเสมอ
     # (middle ครอบคลุมอย่างน้อย 1 บรรทัดเต็มของบรรทัด 2 หรือ 3 ซึ่งมี `{i}` กำกับ)
     for case in cases:
@@ -136,7 +139,7 @@ def test_build_eval_cases_skips_long_middle(monkeypatch):
 
     code = _heldout_variant(make)
     monkeypatch.setattr(ev, "iter_codes", lambda *a, **k: [code])
-    cases = ev.build_eval_cases(
+    cases, skipped = ev.build_eval_cases(
         dataset_id="x",
         dataset_column="content",
         limit=1,
@@ -144,6 +147,7 @@ def test_build_eval_cases_skips_long_middle(monkeypatch):
         n_cases=10,
     )
     assert cases == []  # middle เกิน 256 ถูกข้าม ไม่ raise
+    assert skipped == 1  # 🟡 ข้ามต้องถูกนับรายงาน — เงียบ = EM ถูกอ่านว่า representative
 
 
 def test_build_eval_cases_deterministic(monkeypatch):
@@ -158,7 +162,7 @@ def test_build_eval_cases_deterministic(monkeypatch):
 def test_build_eval_cases_fewer_than_requested(monkeypatch):
     held = _codes_where(True, 3)
     monkeypatch.setattr(ev, "iter_codes", lambda *a, **k: held)
-    cases = ev.build_eval_cases(
+    cases, skipped = ev.build_eval_cases(
         dataset_id="x",
         dataset_column="content",
         limit=3,
@@ -166,6 +170,52 @@ def test_build_eval_cases_fewer_than_requested(monkeypatch):
         n_cases=10,
     )
     assert len(cases) == 3  # คืนเท่าที่มี ไม่ raise (spec §6)
+    assert skipped == 0
+
+
+def test_run_eval_json_reports_skipped_long_middle(monkeypatch, tmp_path):
+    # 🟡 skipped ต้องปรากฏใน summary JSON — เงียบ = EM ถูกอ่านว่า representative
+    def make_long(i: int) -> str:
+        line = " ".join(f"w{j}" for j in range(300))
+        return f"{line} # long{i}\n{line}\n{line}\n"
+
+    long_code = _heldout_variant(make_long)
+    normal = _codes_where(True, 3)
+    monkeypatch.setattr(ev, "iter_codes", lambda *a, **k: [long_code] + normal)
+
+    class _FakeAutoTok:
+        @staticmethod
+        def from_pretrained(model_id):
+            return FakeTok()
+
+    monkeypatch.setattr(ev, "AutoTokenizer", _FakeAutoTok)
+    monkeypatch.setattr(ev, "ensure_fim_tokens", lambda tok, vals: {})
+    class _FakeModel:
+        def to(self, *_args):
+            return self
+
+        def eval(self):
+            return self
+
+    monkeypatch.setattr(
+        ev,
+        "AutoModelForCausalLM",
+        SimpleNamespace(from_pretrained=lambda *a, **k: _FakeModel()),
+    )
+    monkeypatch.setattr(
+        ev,
+        "evaluate_cases",
+        lambda *a, **k: {
+            "exact_match_pct": 0.0,
+            "token_f1_mean": 0.0,
+            "per_case": [],
+        },
+    )
+    result = ev.run_eval(_valid_config(), mode="base", eval_dir=tmp_path)
+    assert result["n"] == 3
+    assert result["skipped_long_middle"] == 1  # หาย = RED
+    on_disk = json.loads((tmp_path / "base.json").read_text(encoding="utf-8"))
+    assert on_disk["skipped_long_middle"] == 1
 
 
 def test_evaluate_cases_prompt_equals_build_fim_prompt():
