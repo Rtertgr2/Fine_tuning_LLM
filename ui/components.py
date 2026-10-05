@@ -27,16 +27,28 @@ def verdict_style(verdict: str) -> tuple[str, str]:
 
 
 def build_metric_plot(metrics: list[dict]) -> Figure:
-    """วาด Loss (แกนซ้าย) + LR (แกนขวา) จาก list ของ metric_msg ดิบ — ว่างก็คืน figure เปล่า"""
+    """วาด Loss (แกนซ้าย) + LR (แกนขวา) จาก metric/val_metric ดิบ — ว่างก็คืน figure เปล่า"""
     fig, ax_loss = plt.subplots(figsize=(7, 3))
     ax_lr = ax_loss.twinx()
 
-    steps = [m["step"] for m in metrics]
-    losses = [m["loss"] for m in metrics]
-    lrs = [m["lr"] for m in metrics]
+    train = [m for m in metrics if "loss" in m]  # val_metric ไม่มี loss/lr
+    steps = [m["step"] for m in train]
+    losses = [m["loss"] for m in train]
+    lrs = [m.get("lr", 0.0) for m in train]
 
     ax_loss.plot(steps, losses, color="#2563eb", label="loss")
     ax_lr.plot(steps, lrs, color="#9333ea", label="lr")
+    val_points = [(m["step"], m["val_loss"]) for m in metrics if "val_loss" in m]
+    if val_points:
+        val_steps, val_losses = zip(*val_points)
+        ax_loss.plot(
+            val_steps,
+            val_losses,
+            linestyle="None",
+            marker="o",
+            color="#f97316",
+            label="val_loss",
+        )
     ax_loss.set_xlabel("step")
     ax_loss.set_ylabel("loss", color="#2563eb")
     ax_lr.set_ylabel("lr", color="#9333ea")

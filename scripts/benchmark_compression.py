@@ -158,7 +158,7 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
     if not args.no_eval:
         fim_tokens = _load_fim(args.fim_key)
         tokenizer = AutoTokenizer.from_pretrained(str(source))
-        cases = build_eval_cases(
+        cases, _skipped = build_eval_cases(
             dataset_id=args.dataset,
             dataset_column=args.column,
             limit=args.limit,

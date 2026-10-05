@@ -23,6 +23,7 @@ from configs.safe_defaults import (
     MAX_SEQ_LENGTH_DEFAULT,
     MIN_SAMPLE_LINES,
     SEED,
+    VAL_EVAL_SAMPLES,
 )
 from core.sandbox import project_roots
 from datasets import load_dataset
@@ -79,20 +80,46 @@ def build_samples(
 
     - rng ตัวเดียว seed ด้วย `seed` ทั้ง generator → ผลซ้ำได้
     - sample สั้นกว่า min_lines หรือมีจุดตัดไม่พอ → ข้าม (ไม่ consume rng)
-    - truncate (เมื่อมี tokenizer) จะเผื่อที่ให้ EOS ก่อนเสมอ → EOS อยู่ท้ายเสมอ
+    - plain LM: truncate (เมื่อมี tokenizer) เผื่อที่ให้ EOS ก่อนเสมอ → EOS อยู่ท้ายเสมอ
+    - FIM (เมื่อมี tokenizer): middle ห้ามโดนตัด — หด suffix/prefix ให้พอดี budget
+      หรือถ้า middle เกิน budget ทั้งก้อน → ข้าม sample
     """
     rng = random.Random(seed)
+    eos_len = 0
+    budget = max_seq_length
+    fim_overhead = 0
+    if tokenizer is not None:
+        eos_len = len(tokenizer.encode(eos, add_special_tokens=False))
+        budget = max_seq_length - eos_len
+        fim_overhead = sum(
+            len(tokenizer.encode(t, add_special_tokens=False))
+            for t in fim_tokens.values()
+        )
     for code in codes:
         if len(code.splitlines()) < min_lines or len(_cut_positions(code)) < 2:
             continue
         if rng.random() < fim_rate:
             prefix, suffix, middle = split_fim(code, rng)
-            body = format_psm(prefix, suffix, middle, fim_tokens=fim_tokens, eos="")
+            if tokenizer is None:
+                body = format_psm(prefix, suffix, middle, fim_tokens=fim_tokens, eos="")
+            else:
+                # middle อยู่ท้าย PSM — tail-truncate จะตัด middle แล้วประกบ EOS
+                # กลาง span (สอนโมเดล "หยุดกลางคัน" — ขัด eval ที่ middle สมบูรณ์เสมอ)
+                # → หด suffix/prefix แบบเดียวกับ build_eval_cases แทน
+                middle_len = len(tokenizer.encode(middle, add_special_tokens=False))
+                if middle_len + fim_overhead > budget:
+                    continue  # เกิน budget → ทิ้งทั้งก้อน (middle ต้องมาครบเสมอ)
+                left = budget - fim_overhead - middle_len
+                suffix = truncate_to_tokens(suffix, tokenizer, left // 2)
+                suffix_len = len(tokenizer.encode(suffix, add_special_tokens=False))
+                prefix = truncate_to_tokens(
+                    prefix, tokenizer, max(0, left - suffix_len)
+                )
+                body = format_psm(prefix, suffix, middle, fim_tokens=fim_tokens, eos="")
         else:
             body = code
-        if tokenizer is not None:
-            eos_len = len(tokenizer.encode(eos, add_special_tokens=False))
-            body = truncate_to_tokens(body, tokenizer, max_seq_length - eos_len)
+            if tokenizer is not None:
+                body = truncate_to_tokens(body, tokenizer, budget)
         yield body + eos
 
 
@@ -110,6 +137,36 @@ def is_heldout(code: str, heldout_ratio: float = HELDOUT_RATIO) -> bool:
 def filter_train_codes(codes: Iterable[str]) -> list[str]:
     """กรอง heldout ออกจากชุดเทรน — ห้าม train ปนชุดประเมิน (plan.md §8)"""
     return [code for code in codes if not is_heldout(code)]
+
+
+def build_eval_texts(
+    codes: Iterable[str],
+    *,
+    fim_tokens: dict,
+    eos: str,
+    tokenizer: Any | None = None,
+    max_seq_length: int = MAX_SEQ_LENGTH_DEFAULT,
+    limit: int = VAL_EVAL_SAMPLES,
+) -> list[str]:
+    """text สำหรับ validation loop ระหว่างเทรน — เฉพาะ heldout (ไม่เคยเห็นตอนเทรน)
+
+    - ใช้ `build_samples` เดียวกับ train (seed/fim_rate เดียวกัน) → val loss เทียบเทรนได้
+    - หยุดอ่านทันทีที่ครบ `limit` (ไม่ materialize heldout ทั้งชุด)
+    - ไม่มี heldout ที่ใช้ได้ → `[]` (ผู้เรียกปิด eval loop เอง ห้าม crash)
+    """
+    heldout = (code for code in codes if is_heldout(code))
+    texts: list[str] = []
+    for text in build_samples(
+        heldout,
+        fim_tokens=fim_tokens,
+        eos=eos,
+        tokenizer=tokenizer,
+        max_seq_length=max_seq_length,
+    ):
+        texts.append(text)
+        if len(texts) >= limit:
+            break
+    return texts
 
 
 def list_datasets() -> list[str]:

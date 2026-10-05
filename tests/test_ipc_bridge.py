@@ -58,6 +58,20 @@ def test_status_msg_states():
         ipc.status_msg("done")  # state นอกชุด → fail fast ห้ามส่ง msg รูปผิดให้ UI เดางาน
 
 
+def test_val_metric_msg_shape():
+    # 🟡 val loop: eval_loss มี schema ของตัวเอง (validate เข้ม — metric เดิมต้องครบทั้ง 4 key)
+    msg = ipc.val_metric_msg(step=10, epoch=0.2, val_loss=1.23)
+    assert msg == {"type": "val_metric", "step": 10, "epoch": 0.2, "val_loss": 1.23}
+    assert ipc.validate_message(msg) is True
+    assert (
+        ipc.validate_message(
+            {"type": "val_metric", "step": 1, "epoch": 0.1, "val_loss": "x"}
+        )
+        is False
+    )  # val_loss ต้องเป็นตัวเลข
+    assert ipc.validate_message({"type": "val_metric", "step": 1}) is False
+
+
 def test_validate_message_rejects_bad():
     assert ipc.validate_message("not a dict") is False
     assert ipc.validate_message({"payload": 1}) is False  # ไม่มี type

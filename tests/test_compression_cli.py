@@ -92,7 +92,7 @@ def _wire(cli, monkeypatch, tmp_path, calls: list[str], reports: list[dict]):
     monkeypatch.setattr(cli, "write_report", recording_write)
     # eval setup — ไม่ต้อง record (เกิดก่อน loop): ให้ผ่านเฉย ๆ
     monkeypatch.setattr(
-        cli, "build_eval_cases", lambda **k: ["case"] * int(k["n_cases"])
+        cli, "build_eval_cases", lambda **k: (["case"] * int(k["n_cases"]), 0)
     )
     monkeypatch.setattr(
         cli, "AutoTokenizer", SimpleNamespace(from_pretrained=lambda *a, **k: object())
@@ -284,7 +284,7 @@ def test_empty_eval_cases_errors_before_server(monkeypatch, tmp_path, capsys):
     calls: list[str] = []
     reports: list[dict] = []
     _wire(cli, monkeypatch, tmp_path, calls, reports)
-    monkeypatch.setattr(cli, "build_eval_cases", lambda **k: [])
+    monkeypatch.setattr(cli, "build_eval_cases", lambda **k: ([], 0))
 
     rc = cli.main(["--model", "m", "--variants", "fp16"])
 

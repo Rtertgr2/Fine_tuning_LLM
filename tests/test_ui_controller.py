@@ -9,7 +9,7 @@ import queue as stdlib_queue
 
 import pytest
 
-from core.ipc_bridge import error_msg, log_msg, metric_msg, status_msg
+from core.ipc_bridge import error_msg, log_msg, metric_msg, status_msg, val_metric_msg
 from ui import controller as ui_controller
 from ui.controller import TrainingController
 
@@ -149,6 +149,18 @@ def test_tick_drains_metric_and_log():
     snap2 = ctl.tick()
     assert snap2.metrics == snap.metrics
     assert snap2.logs == snap.logs
+
+
+def test_tick_drains_val_metric():
+    # 🟡 val loop: val_metric ต้องผ่าน validate + เข้า metrics list (ไม่งั้น plot ไม่เห็น)
+    ctl, _fp, _state = make_controller(
+        messages=[val_metric_msg(step=10, epoch=0.3, val_loss=0.85)]
+    )
+    snap = ctl.tick()
+    assert snap.metrics == [
+        {"type": "val_metric", "step": 10, "epoch": 0.3, "val_loss": 0.85}
+    ]
+    assert ctl._error is None
 
 
 def test_status_machine_dedup_and_terminal_ignored():

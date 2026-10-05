@@ -206,6 +206,47 @@ FULL_CONFIG = {
 }
 
 
+def test_bf16_follows_xpu_runtime_support(monkeypatch):
+    # 🟡 เดิม hardcode bf16=True ไม่เคยเช็คว่า autocast รันบน XPU ได้จริง
+    monkeypatch.setattr(wa.torch.xpu, "is_bf16_supported", lambda: False)
+    assert wa.build_training_args("out").bf16 is False
+
+
+def test_bf16_fallback_true_when_api_unavailable(monkeypatch):
+    # API หาย/raise → คงพฤติกรรมเดิม (True) + warning ไม่ใช่ crash
+    def _boom():
+        raise RuntimeError("xpu api unavailable")
+
+    monkeypatch.setattr(wa.torch.xpu, "is_bf16_supported", _boom)
+    with pytest.warns(UserWarning, match="bf16"):
+        args = wa.build_training_args("out")
+    assert args.bf16 is True
+
+
+def test_args_enable_validation_loop():
+    # 🟡 เดิมไม่มี eval loop เลย → overfitting มองไม่เห็นจน eval สุดท้าย
+    args = wa.build_training_args("out", max_steps=500)
+    assert args.eval_strategy == "steps"
+    assert args.eval_steps == 50  # max(VAL_EVAL_MIN_STEPS=50, 500//10)
+    tiny = wa.build_training_args("out", max_steps=6)
+    assert tiny.eval_steps == 50  # ห้าม < 50 — smoke run 6 steps ไม่ต้องชน eval
+
+
+def test_args_disable_eval_when_no_heldout():
+    args = wa.build_training_args("out", has_eval_dataset=False)
+    assert args.eval_strategy == "no"  # ไม่มี heldout → ปิด val loop (ห้าม crash)
+
+
+def test_on_log_eval_loss_sends_val_metric():
+    # eval log มาในรูป {"eval_loss": ...} (ไม่มี "loss") → ต้องเป็น val_metric ไม่ใช่ log ดิบ
+    q, cb, state, control = _cb_with_states()
+    cb.on_log(None, state, control, {"eval_loss": 0.9, "step": 10, "epoch": 0.5})
+    assert len(q.messages) == 1
+    msg = q.messages[0]
+    assert msg == {"type": "val_metric", "step": 10, "epoch": 0.5, "val_loss": 0.9}
+    assert ipc.validate_message(msg) is True
+
+
 def test_validate_config():
     wa.validate_config(dict(FULL_CONFIG))  # ครบ → ไม่ raise
     for key in FULL_CONFIG:
@@ -395,6 +436,11 @@ def test_run_training_filters_heldout_from_iter_codes(monkeypatch):
 
     class _Tok:
         eos_token = "</s>"
+
+        def encode(self, text, add_special_tokens=False):
+            # double ต้องพอให้ build_eval_texts (ของจริง) คำนวณ budget ได้ —
+            # code เดียวบรรทัดโดน build_samples skip (min_lines) อยู่ดี
+            return [0] * max(1, len(text))
 
     class _Trainer:
         def __init__(self, **_kw):

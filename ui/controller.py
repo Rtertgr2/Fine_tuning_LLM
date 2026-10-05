@@ -220,7 +220,7 @@ class TrainingController:
 
     def _handle_message(self, msg: dict) -> None:
         mtype = msg["type"]
-        if mtype == "metric":
+        if mtype in ("metric", "val_metric"):
             self._metrics.append(msg)
         elif mtype == "log":
             self._append_log(msg["level"], msg["text"])

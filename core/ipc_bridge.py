@@ -22,6 +22,7 @@ TERMINAL_STATUSES: frozenset[str] = frozenset({"finished", "aborted"})
 
 _REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
     "metric": ("step", "loss", "lr", "epoch"),
+    "val_metric": ("step", "epoch", "val_loss"),
     "log": ("level", "text"),
     "status": ("state",),
     "error": ("message", "traceback"),
@@ -30,6 +31,11 @@ _REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
 
 def metric_msg(step: int, loss: float, lr: float, epoch: float) -> dict:
     return {"type": "metric", "step": step, "loss": loss, "lr": lr, "epoch": epoch}
+
+
+def val_metric_msg(step: int, epoch: float, val_loss: float) -> dict:
+    """val loss ระหว่างเทรน — schema ของตัวเอง (validate เข้ม: metric ต้องครบทั้ง 4 key)"""
+    return {"type": "val_metric", "step": step, "epoch": epoch, "val_loss": val_loss}
 
 
 def log_msg(level: str, text: str) -> dict:
@@ -59,6 +65,10 @@ def validate_message(msg: object) -> bool:
     if msg_type == "metric":
         return all(
             isinstance(msg[key], (int, float)) for key in ("step", "loss", "lr", "epoch")
+        )
+    if msg_type == "val_metric":
+        return all(
+            isinstance(msg[key], (int, float)) for key in ("step", "epoch", "val_loss")
         )
     if msg_type == "log":
         return isinstance(msg["level"], str) and isinstance(msg["text"], str)
