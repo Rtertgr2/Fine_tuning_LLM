@@ -20,6 +20,7 @@ from configs.safe_defaults import (
     DEFAULT_DATASET_ID,
     DEFAULT_MODEL_ID,
     DEFAULT_OUTPUT_DIR as _DEFAULT_OUTPUT_DIR,
+    EVAL_N_CASES,
     LORA_RANK_DEFAULT,
     MAX_SEQ_LENGTH_DEFAULT,
     MAX_STEPS,
@@ -66,6 +67,26 @@ def _run_compare(eval_dir: Path) -> int:
         print(
             f"Cannot compare: eval sets differ (base n={base.get('n')} "
             f"vs finetuned n={fine.get('n')}) — rerun both modes with same --n-cases",
+            file=sys.stderr,
+        )
+        return 2
+
+    if base.get("f1_kind") != fine.get("f1_kind"):
+        print(
+            f"Cannot compare: metric semantics differ (base f1_kind={base.get('f1_kind')!r} "
+            f"vs finetuned f1_kind={fine.get('f1_kind')!r}) — rerun both modes with the current build",
+            file=sys.stderr,
+        )
+        return 2
+    if (base.get("dataset_id"), base.get("dataset_column")) != (
+        fine.get("dataset_id"),
+        fine.get("dataset_column"),
+    ):
+        print(
+            f"Cannot compare: eval sets come from different datasets "
+            f"(base {base.get('dataset_id')!r}/{base.get('dataset_column')!r} vs "
+            f"finetuned {fine.get('dataset_id')!r}/{fine.get('dataset_column')!r}) — "
+            "rerun both modes on the same dataset",
             file=sys.stderr,
         )
         return 2
@@ -120,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--mode", choices=["base", "finetuned"], help="run one eval mode")
     group.add_argument("--compare", action="store_true", help="compare saved results")
-    parser.add_argument("--n-cases", type=int, default=100, help="eval set size (default 100)")
+    parser.add_argument("--n-cases", type=int, default=EVAL_N_CASES, help="eval set size (default 100)")
     parser.add_argument("--eval-dir", type=Path, default=ev.EVAL_DIR, help="where JSON results live")
     parser.add_argument("--output-dir", default=_DEFAULT_OUTPUT_DIR, help="training output dir (finetuned mode)")
     parser.add_argument("--fim-key", default="qwen", help="FIM registry key (default qwen)")

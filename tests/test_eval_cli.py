@@ -49,6 +49,25 @@ def test_import_eval_and_evaluator_do_not_load_torch():
     assert proc.returncode == 0, proc.stderr
 
 
+def test_compare_rejects_f1_kind_mismatch(tmp_path, capsys):
+    """review#5: ต่าง f1_kind → ห้ามเทียบ (คนละความหมายของ metric)"""
+    base = {**_result("base", em=5.0, f1=0.2), "f1_kind": "lcs"}
+    fine = _result("finetuned", em=6.0, f1=0.25)          # legacy = ไม่มี key
+    eval_dir = _write_two(tmp_path, base, fine)
+    assert cli_main(["--compare", "--eval-dir", eval_dir]) == 2
+    assert "metric semantics differ" in capsys.readouterr().err
+
+
+def test_compare_rejects_dataset_mismatch(tmp_path, capsys):
+    base = {**_result("base", em=5.0, f1=0.2),
+            "f1_kind": "lcs", "dataset_id": "a/ds", "dataset_column": "content"}
+    fine = {**_result("finetuned", em=6.0, f1=0.25),
+            "f1_kind": "lcs", "dataset_id": "b/ds", "dataset_column": "content"}
+    eval_dir = _write_two(tmp_path, base, fine)
+    assert cli_main(["--compare", "--eval-dir", eval_dir]) == 2
+    assert "different datasets" in capsys.readouterr().err
+
+
 def test_compare_fail_on_tie(tmp_path, capsys):
     # M9: เดิม tie → PASS (+0.0 ผ่าน gate) — ตอนนี้ต้องดีขึ้นเกิน min-delta ถึงจะ PASS
     r = _result("base", em=5.0, f1=0.2)

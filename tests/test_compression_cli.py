@@ -352,7 +352,9 @@ def test_delta_shown_when_case_count_matches(monkeypatch, tmp_path):
 
     baseline_path = tmp_path / "baseline.json"
     baseline_path.write_text(
-        json.dumps({"exact_match_pct": 10.0, "token_f1_mean": 0.5, "n": 100}),
+        json.dumps({"exact_match_pct": 10.0, "token_f1_mean": 0.5, "n": 100,
+                    "dataset_id": cli.DEFAULT_DATASET_ID, "dataset_column": cli.DEFAULT_DATASET_COLUMN,
+                    "f1_kind": "lcs"}),
         encoding="utf-8",
     )
     captured: dict = {}
@@ -412,3 +414,92 @@ def test_tokens_per_sec_maps_generation_rate(monkeypatch, tmp_path):
     row = reports[0]
     assert row["tokens_per_sec"] == 50  # gen_tps (fake bench)
     assert row["prompt_tokens_per_sec"] == 100  # pp เก็บแยก field
+
+
+def test_quant_gate_constants_pinned():
+    """M9-quant (D-2): threshold ตรึง — เปลี่ยน = แก้ test+spec ด้วย"""
+    cli = _load_cli()
+    assert cli.QUANT_MAX_EM_DROP_PCT == 1.0
+    assert cli.QUANT_MAX_F1_DROP == 0.02
+
+
+def _row(variant, em, f1):
+    # key ตรง build_report (core/compression/report.py:41,:54,:55) — verified
+    return {"variant": variant, "exact_match_pct": em, "token_f1": f1}
+
+
+def test_check_quant_regression_flags_em_drop_beyond_tolerance():
+    cli = _load_cli()
+    rows = [_row("fp16", 50.0, 0.60), _row("q8_0", 49.5, 0.595), _row("q4_k_m", 48.4, 0.58)]
+    out = cli.check_quant_regression(rows)
+    # q4_k_m: EM drop 1.6 > 1.0 → flag; q8_0 drop 0.5 ≤ 1.0 → ผ่าน; F1 drops 0.005/0.02 ไม่เกิน → ไม่ flag
+    assert len(out) == 1
+    assert "q4_k_m" in out[0] and "EM" in out[0]
+
+
+def test_check_quant_regression_passes_at_boundary():
+    cli = _load_cli()
+    rows = [_row("fp16", 50.0, 0.60), _row("q4_k_m", 49.0, 0.58)]
+    assert cli.check_quant_regression(rows) == []   # drop == threshold ไม่ใช่ violation (>) + f1 0.02 == ไม่เกิน
+
+
+def test_check_quant_regression_skips_without_fp16():
+    cli = _load_cli()
+    assert cli.check_quant_regression([_row("q8_0", 40.0, 0.4)]) == []
+
+
+def test_main_fails_on_quant_regression(monkeypatch):
+    cli = _load_cli()
+    monkeypatch.setattr(cli, "run_benchmark", lambda args: [_row("fp16", 50.0, 0.6), _row("q4_k_m", 40.0, 0.3)])
+    assert cli.main(["--model", "dummy"]) == 1        # RF-5: intentional exit-code change เดิมคืน 0 เสมอ
+
+
+def test_main_passes_when_within_tolerance(monkeypatch):
+    cli = _load_cli()
+    monkeypatch.setattr(cli, "run_benchmark", lambda args: [_row("fp16", 50.0, 0.6), _row("q4_k_m", 49.6, 0.595)])
+    assert cli.main(["--model", "dummy"]) == 0
+
+
+def _baseline_args(cli, baseline_file):
+    """args ผ่าน parser จริง → dataset/column = DEFAULT_DATASET_ID/COLUMN (ค่า default เดียวกับรันจริง)"""
+    return cli.build_parser().parse_args(
+        ["--model", "m", "--baseline", str(baseline_file)]
+    )
+
+
+def _write_baseline(tmp_path, **extra):
+    bl = tmp_path / "baseline.json"
+    bl.write_text(
+        json.dumps({"n": 2, "exact_match_pct": 1.0, "token_f1_mean": 0.1, **extra}),
+        encoding="utf-8",
+    )
+    return bl
+
+
+def test_baseline_dict_skips_identity_mismatch(tmp_path, capsys):
+    """#11: baseline ต้องมี dataset/column ตรงกับรัน — ไม่งั้น delta = คนละชุด"""
+    cli = _load_cli()
+    bl = _write_baseline(tmp_path, dataset_id="other/ds", dataset_column="content",
+                         f1_kind="lcs")
+    args = _baseline_args(cli, bl)
+    assert cli._baseline_dict(args, tmp_path / "src", 2) is None
+    err = capsys.readouterr().err
+    assert "baseline skipped" in err and "identity" in err   # note เป็นอังกฤษ
+
+
+def test_baseline_dict_skips_legacy_without_identity(tmp_path, capsys):
+    """ไฟล์ eval ยุคก่อน markers — เทียบไม่ได้ → note ให้รัน eval ใหม่ (RF-6: เจตนา)"""
+    cli = _load_cli()
+    bl = _write_baseline(tmp_path)                      # ไม่มี identity keys
+    args = _baseline_args(cli, bl)
+    assert cli._baseline_dict(args, tmp_path / "src", 2) is None
+    assert "identity" in capsys.readouterr().err
+
+
+def test_baseline_dict_returns_matching(tmp_path):
+    cli = _load_cli()
+    bl = _write_baseline(tmp_path, dataset_id=cli.DEFAULT_DATASET_ID,
+                         dataset_column=cli.DEFAULT_DATASET_COLUMN, f1_kind="lcs")
+    args = _baseline_args(cli, bl)
+    out = cli._baseline_dict(args, tmp_path / "src", 2)
+    assert out is not None and out["n"] == 2

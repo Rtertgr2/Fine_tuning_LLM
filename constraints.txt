@@ -10,3 +10,5 @@ pytest==9.1.1
 torch==2.14.1+xpu
 transformers==5.18.0
 trl==1.14.1
+protobuf==7.36.2
+sentencepiece==0.2.2

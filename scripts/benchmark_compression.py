@@ -19,6 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from configs.safe_defaults import (
     DEFAULT_DATASET_COLUMN,
     DEFAULT_DATASET_ID,
+    EVAL_N_CASES,
+    F1_KIND,
     MAX_SEQ_LENGTH_DEFAULT,
     TRAIN_CODE_LIMIT,
 )
@@ -48,6 +50,43 @@ from core.trainer_worker import AutoTokenizer
 # server ctx ต้องครอบคลุม theoretical worst (budget + specials + EVAL_MAX_NEW_TOKENS) เสมอ
 FIM_PROMPT_MARGIN: int = 16
 
+# M9-quant (D-1/D-2): quantized ต้องไม่แย่กว่า fp16 ในรันเดียวกันเกิน threshold — hard gate
+QUANT_MAX_EM_DROP_PCT: float = 1.0
+QUANT_MAX_F1_DROP: float = 0.02
+
+
+def check_quant_regression(rows: list[dict]) -> list[str]:
+    """คืน violation list — variant ที่ไม่ใช่ fp16 แย่กว่า fp16 (รันเดียวกัน = identity ตรง by construction)
+
+    ไม่มี fp16 หรือไม่มี metrics (--no-eval) → [] (gate ข้าม — main พิมพ์ note)
+    """
+    fp16 = next(
+        (r for r in rows
+         if r.get("variant") == "fp16" and r.get("exact_match_pct") is not None),
+        None,
+    )
+    if fp16 is None:
+        return []
+    out = []
+    for r in rows:
+        if r is fp16 or r.get("exact_match_pct") is None:
+            continue
+        em_drop = round(fp16["exact_match_pct"] - r["exact_match_pct"], 6)
+        if em_drop > QUANT_MAX_EM_DROP_PCT:
+            out.append(
+                f"{r['variant']}: EM drop {em_drop:.1f}pt vs fp16 exceeds {QUANT_MAX_EM_DROP_PCT}pt"
+            )
+        if fp16.get("token_f1") is None or r.get("token_f1") is None:
+            continue                      # build_report ค่า float | None — ข้ามถ้า eval ฝั่งไหนไม่มี
+        # round 6dp: float (0.60-0.58 = 0.020000000000000018) ห้ามหลุด boundary "เท่ากับ threshold = ผ่าน"
+        # — precedent เดียวกับ M9 min-delta ใน eval.py
+        f1_drop = round(fp16["token_f1"] - r["token_f1"], 6)
+        if f1_drop > QUANT_MAX_F1_DROP:
+            out.append(
+                f"{r['variant']}: token F1 drop {f1_drop:.2f} vs fp16 exceeds {QUANT_MAX_F1_DROP}"
+            )
+    return out
+
 
 def parse_variants(raw: str) -> tuple[str, ...]:
     return tuple(v.strip() for v in raw.split(",") if v.strip())
@@ -76,7 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--context", type=int, default=MAX_SEQ_LENGTH_DEFAULT, help="context tokens"
     )
     parser.add_argument(
-        "--eval-cases", type=int, default=100, help="number of eval cases"
+        "--eval-cases", type=int, default=EVAL_N_CASES, help="number of eval cases"
     )
     parser.add_argument(
         "--no-eval", action="store_true", help="skip llama-server eval (metrics = null)"
@@ -129,15 +168,31 @@ def _baseline_dict(
         return None
     if built_cases is None:
         return baseline  # --no-eval: ไม่มี metrics ปัจจุบัน → delta ไม่ถูกแสดงอยู่ดี
-    if baseline.get("n") == built_cases:
-        return baseline
-    # Review #2: จำนวนเคสไม่ตรง = คนละการทดสอบ → ห้ามเทียบ (ตรง convention eval.py --compare)
-    print(
-        f"note: baseline skipped (case count differs: baseline n={baseline.get('n')!r}, "
-        f"run n={built_cases}) — deltas require the same evaluation",
-        file=sys.stderr,
-    )
-    return None
+    if baseline.get("n") != built_cases:
+        # Review #2: จำนวนเคสไม่ตรง = คนละการทดสอบ → ห้ามเทียบ (ตรง convention eval.py --compare)
+        print(
+            f"note: baseline skipped (case count differs: baseline n={baseline.get('n')!r}, "
+            f"run n={built_cases}) — deltas require the same evaluation",
+            file=sys.stderr,
+        )
+        return None
+    # #11 identity guard: dataset/column/f1_kind ไม่ตรง = คนละ eval → delta โกหก
+    if baseline.get("dataset_id") != args.dataset or baseline.get("dataset_column") != args.column:
+        print(
+            f"note: baseline skipped (eval identity differs or missing: baseline="
+            f"{baseline.get('dataset_id')!r}/{baseline.get('dataset_column')!r} vs run="
+            f"{args.dataset!r}/{args.column!r}) — rerun eval with this build",
+            file=sys.stderr,
+        )
+        return None
+    if baseline.get("f1_kind") != F1_KIND:
+        print(
+            f"note: baseline skipped (f1_kind={baseline.get('f1_kind')!r} != {F1_KIND!r}) — "
+            "rerun eval with the current build",
+            file=sys.stderr,
+        )
+        return None
+    return baseline
 
 
 def run_benchmark(args: argparse.Namespace) -> list[dict]:
@@ -237,10 +292,19 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        run_benchmark(args)
+        rows = run_benchmark(args)
     except CompressionError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    # M9-quant hard gate (D-1): exit 1 เมื่อ quantized แย่กว่า fp16 เกิน threshold
+    violations = check_quant_regression(rows)
+    if violations:
+        print("FAIL — quant regression vs fp16 in the same run:", file=sys.stderr)
+        for v in violations:
+            print(f"  {v}", file=sys.stderr)
+        return 1
+    if not args.no_eval and not any(r.get("variant") == "fp16" for r in rows):
+        print("note: quant-regression gate skipped (fp16 not in this run)", file=sys.stderr)
     return 0
 
 

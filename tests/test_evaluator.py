@@ -328,6 +328,48 @@ def test_run_eval_rejects_bad_mode(tmp_path):
         ev.run_eval(_valid_config(), mode="train")
 
 
+def test_run_eval_stamps_metric_kind_and_identity(monkeypatch, tmp_path):
+    """review#5: ผล eval ต้องระบุ f1_kind + dataset identity — กันเทียบข้าม metric version/ชุดข้อมูล"""
+    monkeypatch.setattr(ev, "iter_codes", lambda *a, **k: _codes_where(True, 3))
+
+    class _FakeAutoTok:
+        @staticmethod
+        def from_pretrained(model_id):
+            return FakeTok()
+
+    monkeypatch.setattr("core.trainer_worker.AutoTokenizer", _FakeAutoTok)
+    monkeypatch.setattr("core.trainer_worker.ensure_fim_tokens", lambda tok, vals: {})
+
+    class _FakeModel:
+        def to(self, *_args):
+            return self
+
+        def eval(self):
+            return self
+
+    monkeypatch.setattr(
+        "core.trainer_worker.AutoModelForCausalLM",
+        SimpleNamespace(from_pretrained=lambda *a, **k: _FakeModel()),
+    )
+    monkeypatch.setattr(
+        ev,
+        "evaluate_cases",
+        lambda *a, **k: {
+            "exact_match_pct": 0.0,
+            "token_f1_mean": 0.0,
+            "per_case": [],
+        },
+    )
+    cfg = _valid_config()
+    result = ev.run_eval(cfg, mode="base", eval_dir=tmp_path)
+    assert result["f1_kind"] == "lcs"
+    assert result["dataset_id"] == cfg["dataset_id"]
+    assert result["dataset_column"] == cfg["dataset_column"]
+    on_disk = json.loads((tmp_path / "base.json").read_text(encoding="utf-8"))
+    assert on_disk["f1_kind"] == "lcs"                     # JSON ที่เขียนก็มี key ครบ
+    assert on_disk["dataset_id"] == cfg["dataset_id"]
+
+
 def test_run_eval_no_cases_raises(monkeypatch, tmp_path):
     # stream ว่าง → ห้ามเขียน JSON metrics ปลอม (false-green §8.2)
     class _FakeAutoTok:

@@ -256,6 +256,28 @@ def test_preflight_safe_estimate(monkeypatch):
     assert result.total_required_gb > 0
 
 
+def test_preflight_fallback_seq_length_is_default(monkeypatch):
+    """Spec-8: config ไม่มี max_seq_length → fallback = MAX_SEQ_LENGTH_DEFAULT (1024) ไม่ใช่ CAP (2048) — estimate VRAM ผิดเงียบ ๆ"""
+    from configs.safe_defaults import MAX_SEQ_LENGTH_DEFAULT
+    from ui import controller as controller_mod
+
+    monkeypatch.setattr(
+        controller_mod.hardware, "inspect", lambda output_dir=".": _fake_ready_hw()
+    )
+    seen: dict = {}
+
+    def fake_estimate(hw, *, model_id, user_params_b=None, seq_length=0):
+        seen["seq_length"] = seq_length
+        return "SENTINEL"
+
+    monkeypatch.setattr(controller_mod, "estimate", fake_estimate)
+    cfg = valid_config()
+    del cfg["max_seq_length"]
+    ctl, _fp, _state = make_controller()
+    assert ctl.preflight(cfg) == "SENTINEL"
+    assert seen["seq_length"] == MAX_SEQ_LENGTH_DEFAULT   # RED เดิม = 2048
+
+
 def test_abort_without_process_returns_false():
     """Review Focus 3: abort ก่อน start → False ไม่ raise"""
     ctl, _fp, _state = make_controller()
@@ -292,6 +314,25 @@ def test_zombie_watchdog_after_drain():
     assert "tb-line" in snap.logs
     assert snap.watchdog is not None
     assert "zombie" in snap.watchdog
+
+
+def test_zombie_tick_resets_status_and_unlocks_start():
+    """Sec-14: zombie ไม่ reset status → ปุ่ม Start ล็อกถาวร — tick ต้องคืนสถานะ terminal + หยุดกรี๊ดซ้ำ"""
+    fp = FakeProcess(alive=False)  # ตายแล้วตั้งแต่ก่อน start tick
+    ctl, _fp, state = make_controller(process=fp)
+    ctl.start(valid_config())
+    # start() drain queue เก่าทิ้ง (I4) — inject หลัง start แบบ test_zombie_watchdog_after_drain :281-294
+    state["queue"].messages.extend(
+        [status_msg("training"), error_msg("boom", "tb-line")]
+    )
+    assert ctl.training_active is True  # BUG ก่อนแก้: process ตายแล้วแต่ status non-terminal → Start ล็อก
+    snap = ctl.tick()
+    assert snap.watchdog is not None and "zombie" in snap.watchdog   # ยังรายงานครั้งแรก
+    assert snap.status == "aborted"
+    assert snap.training_active is False
+    snap2 = ctl.tick()
+    assert snap2.watchdog is None          # ไม่ spam
+    assert ctl.training_active is False    # Start ปลดล็อก (training_active = process and not terminal)
 
 
 def test_exit_terminates_child():

@@ -57,3 +57,14 @@ def test_ipc_and_training_blocks():
 def test_default_output_dir_pinned():
     """D6: output dir default ต้องเป็นที่เดียวใน safe_defaults (เดิมซ้ำใน eval.py + dashboard)"""
     assert sd.DEFAULT_OUTPUT_DIR == "data_cache/finetune_run"
+
+
+def test_eval_dir_and_n_cases_constants_pinned():
+    """Standards-3: EVAL_DIR (repo-rooted) + EVAL_N_CASES = single source ใน safe_defaults"""
+    assert sd.EVAL_DIR.is_absolute()
+    assert str(sd.EVAL_DIR).endswith("data_cache/eval")
+    assert sd.EVAL_N_CASES == 100
+
+
+def test_f1_kind_pinned():
+    assert sd.F1_KIND == "lcs"

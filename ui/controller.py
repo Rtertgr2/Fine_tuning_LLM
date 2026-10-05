@@ -22,7 +22,7 @@ from pathlib import Path
 from queue import Empty
 from typing import NamedTuple
 
-from configs.safe_defaults import MAX_SEQ_LENGTH_CAP
+from configs.safe_defaults import MAX_SEQ_LENGTH_DEFAULT
 from core import hardware
 from core.estimator import EstimateResult, estimate
 from core.ipc_bridge import (
@@ -98,7 +98,7 @@ class TrainingController:
             hw,
             model_id=config["model_id"],
             user_params_b=user_params_b,
-            seq_length=config.get("max_seq_length", MAX_SEQ_LENGTH_CAP),
+            seq_length=config.get("max_seq_length", MAX_SEQ_LENGTH_DEFAULT),
         )
 
     # ------------------------------------------------------------------ #
@@ -174,6 +174,10 @@ class TrainingController:
             watchdog_text = None
             if watchdog is not None:
                 watchdog_text = f"{watchdog['message']}\n{watchdog['traceback']}"
+                # Sec-14: zombie = process ตายแล้ว — คืนสถานะ terminal ทันที
+                # (ไม่งั้น training_active ค้าง True = Start ล็อกถาวร)
+                self._status = "aborted"
+                self._process = None
             return TickSnapshot(
                 status=self._status,
                 metrics=list(self._metrics),

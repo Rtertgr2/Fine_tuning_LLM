@@ -30,7 +30,7 @@ def main() -> int:
     available = torch.xpu.is_available()
     print(f"xpu available   : {available}")
     if not available:
-        print("FAIL: torch.xpu ไม่เห็นอุปกรณ์ (ตรวจ level-zero + intel-compute-runtime)")
+        print("FAIL: no XPU device visible to torch.xpu (check level-zero + intel-compute-runtime)")
         return 1
     device_name = torch.xpu.get_device_name(torch.xpu.current_device())  # D5: ไม่ hardcode 0
     print(f"device name     : {device_name}")
@@ -39,7 +39,7 @@ def main() -> int:
     free_b, total_b = torch.xpu.mem_get_info(torch.xpu.current_device())  # D5
     print(f"vram total/free : {total_b / GB:.2f} / {free_b / GB:.2f} GB")
     if total_b <= 0 or free_b < 0:
-        failures.append("VRAM ค่าผิดปกติ")
+        failures.append("VRAM values are invalid (total <= 0 or free < 0)")
 
     # (3) RAM + disk ตาม threshold — disk วัดบน ancestor ที่มีอยู่จริง (output dir อาจยังไม่ถูกสร้าง — D6)
     ram_avail = psutil.virtual_memory().available / GB
@@ -48,9 +48,9 @@ def main() -> int:
     print(f"ram available   : {ram_avail:.2f} GB (min {RAM_MIN_GB})")
     print(f"disk free       : {disk_free:.2f} GB (min {DISK_MIN_GB})")
     if ram_avail < RAM_MIN_GB:
-        failures.append(f"RAM ว่างน้อยกว่า {RAM_MIN_GB} GB")
+        failures.append(f"available RAM below {RAM_MIN_GB} GB")
     if disk_free < DISK_MIN_GB:
-        failures.append(f"ดิสก์ว่างน้อยกว่า {DISK_MIN_GB} GB")
+        failures.append(f"free disk below {DISK_MIN_GB} GB")
 
     # (4) forward/backward จริงบน XPU
     x = torch.randn(64, 64, device="xpu", requires_grad=True)
@@ -61,11 +61,11 @@ def main() -> int:
     grad = x.grad
     print(f"fwd/bwd loss    : {loss.item():.4f}")
     if grad is None or not torch.isfinite(grad).all():
-        failures.append("grad ไม่ finite")
+        failures.append("forward/backward gradient is not finite")
     elif grad.abs().sum() == 0:
-        failures.append("grad ทั้งหมดเป็นศูนย์")
+        failures.append("forward/backward gradient is all zeros")
     else:
-        print("fwd/bwd grad    : finite + มีค่า != 0 ✓")
+        print("fwd/bwd grad    : finite + non-zero ✓")
 
     # (5) bf16 — trainer ใช้ bf16 จริง (fp32 probe ผ่าน ไม่ได้แปลว่า bf16 kernel ใช้ได้) (D7)
     bf16_ok = torch.xpu.is_bf16_supported()

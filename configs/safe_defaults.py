@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 # --- ทรัพยากร (hardware gate) ---
 RAM_MIN_GB: int = 16
 DISK_MIN_GB: int = 20
@@ -47,6 +49,10 @@ ESTIMATOR_FALLBACK_NUM_LAYERS: int = 40
 HF_HUB_REVISION: str = "main"
 HF_HUB_CACHE_DIR: str = "data_cache/hf_hub"  # cache ใต้ data_cache (ไม่ใช่ ~/.cache) — resolve จาก REPO_ROOT
 DEFAULT_OUTPUT_DIR: str = "data_cache/finetune_run"  # spec §4 table default — เดิมซ้ำใน eval.py:29 + ui/dashboard.py:32 (D6)
+EVAL_DIR: Path = Path(__file__).resolve().parents[1] / "data_cache" / "eval"
+# ↑ absolute จาก repo root — แทนที่ 2 นิยาม (evaluator: relative, report: absolute) (Wave1-3)
+EVAL_N_CASES: int = 100  # eval set size — เดิม hardcode 4 ที่ (build_eval_cases, run_eval, eval.py, benchmark)
+F1_KIND: str = "lcs"  # ความหมายของ token_f1 — เทียบได้เฉพาะ kind เดียวกัน (M10)
 
 # --- Subprocess / IPC ---
 ABORT_SIGTERM_TIMEOUT_S: float = 10.0

@@ -182,11 +182,48 @@ def is_checkpoint_dir(path) -> bool:
     return name.startswith("checkpoint-") and name[len("checkpoint-") :].isdigit()
 
 
+def _has_adapter_files(ckpt: Path) -> bool:
+    return (ckpt / "adapter_config.json").is_file() and bool(
+        list(ckpt.glob("adapter_model*.safetensors"))
+    )
+
+
+def _recover_interrupted_commit(root: Path) -> None:
+    """Sec-12: กู้ swap ที่ค้างกลางทาง (SIGKILL หลัง final→*.old) — เรียกก่อน scan ใน latest_checkpoint
+
+    - base หาย + มี .old และ .saving → เอา .saving (new — `super()._save` เสร็จแล้วตอน commit เริ่ม)
+    - base หาย + มีแค่ .old → คืน .old (checkpoint จริงที่ใช้ได้)
+    - base หาย + มีแค่ .saving โดยไม่มี adapter files → ไม่แตะ (อาจเขียนไม่ครบ)
+    """
+    if not root.is_dir():
+        return
+    for child in sorted(root.iterdir()):
+        name = child.name
+        if name.endswith(".old"):
+            base = child.with_name(name[: -len(".old")])
+            if not is_checkpoint_dir(base) or base.exists():
+                continue
+            saving = root / f"{base.name}.saving"
+            if saving.is_dir() and _has_adapter_files(saving):
+                os.rename(saving, base)
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                os.rename(child, base)
+        elif name.endswith(".saving"):
+            base = child.with_name(name[: -len(".saving")])
+            if not is_checkpoint_dir(base) or base.exists():
+                continue
+            if _has_adapter_files(child):
+                os.rename(child, base)
+
+
 def commit_checkpoint(tmp_dir: Path, final_dir: Path) -> None:
     """ย้าย checkpoint จากโฟลเดอร์ชั่วคราว → ที่อยู่จริงแบบ atomic — model weights ไม่มีวันเสียกลางทาง
 
     ถ้า final มีของเดิมอยู่ → เก็บออกไปเป็น *.old ก่อน แล้ว rename เข้าที่ แล้วล้าง *.old
     (ถ้าโดน abort กลาง save → เหลือแค่ *.saving รอบถัดไปไม่แตะ checkpoint จริง)
+    หมายเหตุ Sec-12: ถ้าโดน SIGKILL ระหว่าง 2 rename นี้ → resume path คืนผ่าน
+    `_recover_interrupted_commit` (เรียกใน latest_checkpoint) — sequence นี้ไม่แก้
     หมายเหตุ (ตรงความจริงตาม source transformers): atomic ครอบเฉพาะ weights ที่เขียนผ่าน
     `_save` — optimizer/scheduler/trainer_state.json เขียนลง checkpoint dir ตรง ๆ ทีหลัง
     → adapter weights ปลอดภัยเสมอ แต่ resume อาจไม่ครบถ้าโดน kill กลางเขียน checkpoint
@@ -304,6 +341,20 @@ REQUIRED_CONFIG_KEYS: frozenset[str] = frozenset(
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+def validate_output_dir(raw_output: str | Path) -> Path:
+    """H1: output_dir ต้องอยู่ใต้ repo หรือ system temp — ใช้ร่วม validate_config + save_adapter_only
+    (commit_checkpoint ทำ rename/rmtree ใน output_dir → กัน data loss นอก sandbox, Sec-10)
+    """
+    output = Path(raw_output).expanduser().resolve()  # expanduser ก่อน: "~/..." จะไม่หนี sandbox
+    # worktree: data_cache เป็น symlink ชี้ main repo → project_roots resolve ให้แล้ว
+    allowed = project_roots(REPO_ROOT) + (Path(tempfile.gettempdir()).resolve(),)
+    if not any(output.is_relative_to(root) for root in allowed):
+        raise ValueError(
+            f"output_dir must be under the repo or the system temp dir (got: {raw_output!r})"
+        )
+    return output
+
+
 def validate_config(config: dict) -> None:
     """ตรวจ config ก่อนเทรน — ขาด key → ValueError บอกชื่อที่ขาด; seq length ผิด hard cap → ValueError
 
@@ -320,13 +371,7 @@ def validate_config(config: dict) -> None:
             f"max_seq_length={seq} must be in (0, {MAX_SEQ_LENGTH_CAP}] (hard cap plan §5)"
         )
     raw_output = config["output_dir"]
-    output = Path(raw_output).expanduser().resolve()  # expanduser ก่อน: "~/..." จะไม่หนี sandbox
-    # worktree: data_cache เป็น symlink ชี้ main repo → project_roots resolve ให้แล้ว
-    allowed = project_roots(REPO_ROOT) + (Path(tempfile.gettempdir()).resolve(),)
-    if not any(output.is_relative_to(root) for root in allowed):
-        raise ValueError(
-            f"output_dir must be under the repo or the system temp dir (got: {raw_output!r})"
-        )
+    validate_output_dir(raw_output)  # H1 — message คงเดิมทุกตัวอักษร (แยกมาเป็น function Sec-10)
     for key in ("max_steps", "lora_rank", "code_limit"):
         if config[key] <= 0:
             raise ValueError(f"{key} must be > 0 (got {config[key]})")
@@ -465,6 +510,7 @@ def latest_checkpoint(output_dir: str | Path) -> Path:
     ไม่มี checkpoint ที่ถูกต้อง → raise ValueError (ผู้เรียกตัดสินใจเอง)
     """
     root = Path(output_dir)
+    _recover_interrupted_commit(root)  # Sec-12: กู้ swap ค้างกลางทางก่อน scan (resume path)
     best: tuple[int, Path] | None = None
     if root.is_dir():
         for child in root.iterdir():
@@ -576,6 +622,7 @@ def save_adapter_only(
     output_dir: str | Path, *, exports_dir: str | Path = "exports"
 ) -> Path:
     """คัดลอกเฉพาะไฟล์ LoRA จาก checkpoint ล่าสุด → exports/<output_dir.name>/ (file op ไม่กิน VRAM)"""
+    validate_output_dir(output_dir)  # Sec-10: H1 gate ที่ save — คุ้มครอง caller ที่ไม่ผ่าน validate_config
     ckpt = latest_checkpoint(output_dir)
     config_src = ckpt / "adapter_config.json"
     # sharded weights (adapter_model-00001-of-00002.safetensors) + index ต้องโดนด้วย

@@ -42,6 +42,7 @@ directory ตาม domain (Approach B ที่เลือก) และ clean
 | M9-doc | `2026-10-02-phase5-eval-docs-design.md:107/:166` ยังนิยาม PASS = `fine ≥ base` + "ไม่ใส่ min-delta (wontfix)" | **override โดย M9 (fix(ml) 2026-10-05)** — audit spec นี้มีผลทับ: gate ปัจจุบันต้องดีขึ้นเกิน min-delta (EM ≥ +0.1pt, F1 ≥ +0.01, tie → FAIL) — ไฟล์ phase5 เป็น non-goal (ห้ามแก้) → ถือเป็นประวัติ ห้ามอ้างย้อนพฤติกรรมโค้ด |
 | M10-doc | `phase5-eval-docs-design.md:83/:131/:169` + `plans/2026-10-02-phase5-eval-docs.md:88` ยังเรียก token_f1 = "multiset / bag-of-tokens ไม่สนลำดับ" | **override โดย M10 (fix(ml) 2026-10-05)** — token_f1 = LCS-based sequence-aware แล้ว (order mattered) — ไฟล์ phase5 เป็น non-goal (ห้ามแก้) → ถือเป็นประวัติ ห้ามอ้างย้อนพฤติกรรมโค้ด |
 | C6-doc | `2026-10-01-phase4-gradio-ui-design.md:108` เขียน `gr.Timer(value=1000, ...)` (สื่อหน่วย ms) แต่ gr.Timer ใช้ **วินาที** และโค้ดจริง `ui/dashboard.py` = `gr.Timer(value=1.0)` (ถูกแล้ว) | **code ถูก, doc ผิด** — phase4 เป็น historical (non-goal §7) → จดไว้ที่นี่: หน่วย Timer = วินาที; ห้ามอ้าง :108 ตีความหน่วย |
+| C4-doc | (audit Docs: "doc เชื่อม label→legend") | grep `legend`/`label→legend` ทั้ง plan.md/README/phase4 docs → **ไม่พบข้อความผูก label=legend** ใน doc ใด ๆ; โค้ด C4 แก้แล้ว (`db0f811` legend จริง + `test_build_metric_plot_has_legend_and_no_pyplot_state`) → ไม่มี doc ต้องแก้ — จดปิดข้อ |
 
 ## 4. Wave inventory & sequence
 

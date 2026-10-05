@@ -45,6 +45,11 @@ python3.11 -m venv .venv
 .venv/bin/pip install -r requirements.txt -c constraints.txt
 ```
 
+> 🛡️ **Security note (peft/CVE):** CVE-2026-71281 (`torch.load` ใน LoRA-GA/CorDA เรียกโดยไม่มี `weights_only=True`)
+> ส่งผลเฉพาะ peft **≤ 0.19.1** — pin ปัจจุบัน `peft==0.21.1` (requirements/constraints) **ไม่ได้รับผลกระทบ**
+> (ตรวจสอบ 2026-10-05 จาก NVD/GHSA/Red Hat) · mitigation: ห้าม pin peft ≤ 0.19.1,
+> และห้ามโหลดไฟล์ cache/covariance `.pt` จากแหล่งที่ไม่ไว้ใจเสมอ
+
 ## เริ่มใช้งาน
 
 ```bash
@@ -57,7 +62,7 @@ python3.11 -m venv .venv
 
 Flow บน UI:
 
-1. **Configuration & Pre-flight** — ตั้ง model/dataset/LoRA/seq/steps แล้วกด **Run Environment Check**
+1. **Configuration & Pre-flight** — ตั้ง model/dataset/LoRA/seq/steps แล้วกด **Run Environment Check** (VRAM จาก `mem_get_info`, ชื่อเครื่องจาก `get_device_name`, disk เช็คบน output dir)
    (คำนวณ VRAM ก่อน — ผ่าน = verdict `safe`/`warning`)
 2. **Training Mission Control** — กด **Start Fine-Tuning** → ดู loss/LR + live log; 途中กด **Abort** ได้
    (SIGTERM → 10s → SIGKILL, การันตีคืน VRAM)

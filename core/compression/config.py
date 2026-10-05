@@ -1,7 +1,10 @@
 """paths/variants/device ของ compression pipeline — จุดเดียวของค่าคงที่
 
 - llama.cpp tools หาจาก `LLAMA_CPP_DIR` (รองรับ system install) → default `tools/llama.cpp`
-- artifact อยู่ `<source_dir>/gguf/` เสมอ; report อยู่ `benchmarks/<source>/<variant>.json`
+- artifact อยู่ `<source_dir>/gguf/` เสมอ; report อยู่ `benchmarks/<model>-<hash>/<variant>.json`
+  (ตรงรูป README "Reports" ซึ่งเป็นแหล่งจริง — `<model>` = `source.name`,
+  `<hash>` = sha256[:8] ของ resolved path ของ source (`report_id`);
+  layout `benchmarks/compression/...` ใน phase6a design = historical/frozen ห้ามอ้าง)
 """
 
 from __future__ import annotations

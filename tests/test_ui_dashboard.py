@@ -222,6 +222,40 @@ def test_on_tick_returns_nine_outputs():
     assert eval_lock.interactive is False  # training_active → ปุ่ม eval ถูกล็อก
 
 
+def test_on_tick_shows_all_log_lines():
+    """Spec-5: live log ครบทุกบรรทัดตาม spec phase4 — เดิมตัดที่ 200 + นับบรรทัดที่หาย"""
+    from types import SimpleNamespace
+    from ui.dashboard import _make_handlers
+
+    class TickController:
+        training_active = False
+        def preflight(self, *a, **k): raise NotImplementedError
+        def start(self, *a): raise NotImplementedError
+        def abort(self, *a): raise NotImplementedError
+        def tick(self):
+            return SimpleNamespace(
+                status="finished", metrics=[],
+                logs=[f"[INFO] line {i}" for i in range(250)],
+                error=None, watchdog=None, training_active=False,
+            )
+
+    h = _make_handlers(TickController())
+    out = h["on_tick"](None)
+    logs_text = out[2]                      # return tuple: (status, fig, logs, banners, ...)
+    assert "[INFO] line 0" in logs_text     # ครบตั้งแต่บรรทัดแรก
+    assert "older lines not shown" not in logs_text
+
+
+def test_lora_rank_widget_only_offers_spec_ranks():
+    """Spec-7: LoRA rank ได้แค่ 8/16/32 (spec §4) — Slider step=8 เลือก 24 ได้"""
+    demo = build_dashboard(FakeController())
+    widgets = [b for b in _iter_blocks(demo)
+               if isinstance(b, gr.Dropdown) and b.label == "LoRA rank"]
+    assert len(widgets) == 1
+    # gradio 6 เก็บ choices เป็น tuple pairs [("8", 8), ...] — value ต้องเป็น int
+    assert [v for _label, v in widgets[0].choices] == [8, 16, 32]
+
+
 # ---------------------------------------------------------------------------
 # F5: auto-render เมื่อ eval JSON ครบ (spec §3.4 "เลือก: auto-render")
 # ---------------------------------------------------------------------------

@@ -40,7 +40,6 @@ _STATUS_COLORS = {
     "aborted": "#dc2626",
 }
 _START_VERDICTS = ("safe", "warning")
-_LOG_TAIL_LINES = 200
 
 
 def _fim_choices() -> list[str]:
@@ -143,12 +142,7 @@ def _make_handlers(controller) -> dict:
             f'**Status:** <span style="color:{color}">{snap.status.upper()}</span>'
         )
         fig = build_metric_plot(snap.metrics)
-        shown = snap.logs[-_LOG_TAIL_LINES:]
-        logs = "\n".join(shown)
-        if len(snap.logs) > _LOG_TAIL_LINES:
-            # M3: บอกให้รู้ว่าถูกตัด — spec ขอ "ครบทุกบรรทัด" แต่ textbox ยาวไม่ได้ (performance)
-            hidden = len(snap.logs) - len(shown)
-            logs = f"… (+{hidden} older lines not shown)\n" + logs
+        logs = "\n".join(snap.logs)  # Spec-5: live log ครบทุกบรรทัด (ไม่ตัด tail)
         banners = []
         if snap.error:
             banners.append(
@@ -299,9 +293,8 @@ def build_dashboard(controller) -> gr.Blocks:
                         label="FIM registry",
                     )
                 with gr.Row():
-                    lora_in = gr.Slider(
-                        minimum=8, maximum=32, step=8, value=LORA_RANK_DEFAULT,
-                        label="LoRA rank",
+                    lora_in = gr.Dropdown(
+                        choices=[8, 16, 32], value=LORA_RANK_DEFAULT, label="LoRA rank",
                     )
                     seq_in = gr.Slider(
                         minimum=64, maximum=MAX_SEQ_LENGTH_CAP, step=64,

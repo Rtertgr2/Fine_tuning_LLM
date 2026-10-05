@@ -14,6 +14,9 @@ from pathlib import Path
 from typing import Literal
 
 from configs.safe_defaults import (
+    EVAL_DIR,
+    EVAL_N_CASES,
+    F1_KIND,
     MAX_SEQ_LENGTH_DEFAULT,
     MIN_SAMPLE_LINES,
     SEED,
@@ -26,7 +29,6 @@ from core.dataset_builder import (
     truncate_to_tokens,
 )
 
-EVAL_DIR = Path("data_cache/eval")
 EVAL_MAX_NEW_TOKENS: int = 256
 
 
@@ -82,7 +84,7 @@ def build_eval_cases(
     dataset_column: str,
     limit: int,
     tokenizer,
-    n_cases: int = 100,
+    n_cases: int = EVAL_N_CASES,
     max_seq_length: int = MAX_SEQ_LENGTH_DEFAULT,
     seed: int = SEED,
 ) -> tuple[list[EvalCase], int]:
@@ -171,7 +173,7 @@ def run_eval(
     config: dict,
     *,
     mode: Literal["base", "finetuned"],
-    n_cases: int = 100,
+    n_cases: int = EVAL_N_CASES,
     eval_dir: Path | str = EVAL_DIR,
     progress: Callable[[int, int], None] | None = None,
 ) -> dict:
@@ -249,6 +251,10 @@ def run_eval(
         "token_f1_mean": metrics["token_f1_mean"],
         "per_case": metrics["per_case"],
         "samples": metrics["per_case"][:5],
+        # review#5: identity markers — กันเทียบข้าม metric version/ชุดข้อมูล (Task 15)
+        "f1_kind": F1_KIND,
+        "dataset_id": config["dataset_id"],
+        "dataset_column": config["dataset_column"],
     }
     if len(cases) < n_cases:
         result["warning"] = (

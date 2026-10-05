@@ -405,6 +405,60 @@ def test_save_adapter_only_copies_shards(tmp_path):
     ]
 
 
+def test_save_adapter_only_rejects_output_outside_sandbox(tmp_path, monkeypatch):
+    """Sec-10: on_save_adapter ไม่ผ่าน validate_config → คัดลอกจากนอก sandbox ได้ — H1 rule ต้อง applied ที่ save (คุ้มครองทุก caller)"""
+    import tempfile
+
+    run = tmp_path / "run"
+    ckpt = run / "checkpoint-3"
+    ckpt.mkdir(parents=True)                    # fixture ลอกจาก test_save_adapter_only_copies (:347-350)
+    (ckpt / "adapter_config.json").write_text("{}")
+    (ckpt / "adapter_model.safetensors").write_bytes(b"fake")
+    # หัน temp root ออกจาก tmp_path → path นี้ "นอก sandbox" ทั้งที่อยู่ใน tmp (hermetic)
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path / "elsewhere"))
+    with pytest.raises(ValueError, match="under the repo or the system temp dir"):
+        wa.save_adapter_only(run, exports_dir=tmp_path / "exports")
+
+
+def _mk_adapter_ckpt(path: Path, marker: str | None = None) -> None:
+    """fixture: checkpoint dir ที่ผ่าน is_checkpoint_dir + มี adapter files (ลอกจาก save tests :347-350)"""
+    path.mkdir(parents=True)
+    (path / "adapter_config.json").write_text("{}")
+    (path / "adapter_model.safetensors").write_bytes(b"fake")
+    if marker is not None:
+        (path / "marker").write_text(marker, encoding="utf-8")
+
+
+def test_latest_checkpoint_restores_old_after_interrupted_swap(tmp_path):
+    """Sec-12: SIGKILL หลัง final→*.old → resume ต้องกู้ .old กลับ (เดิม: checkpoint หายจากรัน เงียบ ๆ)"""
+    root = tmp_path / "out"
+    _mk_adapter_ckpt(root / "checkpoint-5.old")
+    assert wa.latest_checkpoint(root) == root / "checkpoint-5"
+    assert not (root / "checkpoint-5.old").exists()
+
+
+def test_latest_checkpoint_prefers_saving_over_old(tmp_path):
+    """Sec-12: มีทั้ง .old (เก่า) และ .saving (ใหม่ — super()._save เสร็จแล้วตอน commit เริ่ม) → ต้องเอา .saving"""
+    root = tmp_path / "out"
+    _mk_adapter_ckpt(root / "checkpoint-5.old", marker="old")
+    _mk_adapter_ckpt(root / "checkpoint-5.saving", marker="new")
+    restored = wa.latest_checkpoint(root)
+    assert restored == root / "checkpoint-5"
+    assert (restored / "marker").read_text(encoding="utf-8") == "new"
+    assert not (root / "checkpoint-5.old").exists()
+    assert not (root / "checkpoint-5.saving").exists()
+
+
+def test_latest_checkpoint_does_not_trust_partial_saving(tmp_path):
+    """Sec-12: .saving ที่ไม่มี adapter files (first save โดน kill กลางเขียน) — ห้ามกู้ (อาจ partial)"""
+    root = tmp_path / "out"
+    saving = root / "checkpoint-7.saving"
+    saving.mkdir(parents=True)
+    (saving / "trainer_state.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError, match="no checkpoint found"):   # ข้อความ raise เดิม (:479)
+        wa.latest_checkpoint(root)
+
+
 def test_run_eval_worker_sends_progress_and_done(monkeypatch):
     """spawn target: progress → log_msg ทุก step, จบ → EVAL_DONE (UI ใช้จับจบ)"""
     from core import evaluator as ev_mod

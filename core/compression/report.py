@@ -6,10 +6,9 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from configs.safe_defaults import DEFAULT_MODEL_ID
+from configs.safe_defaults import DEFAULT_MODEL_ID, EVAL_DIR
 
-# baseline ของ Phase 5 — ที่เดียวกับ core/evaluator.EVAL_DIR (root/data_cache/eval)
-EVAL_DIR = Path(__file__).resolve().parents[2] / "data_cache" / "eval"
+# baseline ของ Phase 5 — single source: configs.safe_defaults.EVAL_DIR (root/data_cache/eval)
 
 
 def build_report(

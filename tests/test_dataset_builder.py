@@ -110,6 +110,12 @@ def _qwen_tokenizer():
     )
 
 
+def test_split_fim_error_message_is_english():
+    """Wave1-1: error string ที่ leak สู่ UI ต้องอังกฤษ (ข้อ 1 ใน Standards)"""
+    with pytest.raises(ValueError, match="cannot split FIM"):
+        db.split_fim("x = 1\n", random.Random(0))
+
+
 def _expected_fim_parts(code: str, seed: int, fim_rate: float):
     """จำลอง rng stream ของ build_samples เพื่อรู้ prefix/suffix/middle จริง"""
     rng = random.Random(seed)

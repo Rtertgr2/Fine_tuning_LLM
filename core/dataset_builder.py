@@ -42,7 +42,9 @@ def split_fim(code: str, rng: random.Random) -> tuple[str, str, str]:
     """สุ่มจุดตัด 2 จุดที่ line boundary → (prefix, suffix, middle) ทุกส่วน ≥1 บรรทัด"""
     cuts = _cut_positions(code)
     if len(cuts) < 2:
-        raise ValueError("ตัด FIM ไม่ได้: จุดตัดที่ line boundary น้อยกว่า 2")
+        raise ValueError(
+            f"cannot split FIM: fewer than 2 line-boundary cut points (found {len(cuts)})"
+        )
     i, j = sorted(rng.sample(cuts, 2))
     return code[: i + 1], code[j + 1 :], code[i + 1 : j + 1]
 
