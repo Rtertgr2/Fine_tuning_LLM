@@ -25,6 +25,14 @@ def _write_two(tmp_path: Path, base: dict, finetuned: dict) -> str:
     return str(tmp_path)
 
 
+def test_min_delta_constants_pinned():
+    """M9: gate thresholds ถูกตรึง — เปลี่ยน = breaking change ต้องแก้ test+README+docstring ด้วย"""
+    import eval as eval_module
+
+    assert eval_module.MIN_DELTA_EM_PCT == 0.1
+    assert eval_module.MIN_DELTA_F1 == 0.01
+
+
 def test_compare_fail_on_tie(tmp_path, capsys):
     # M9: เดิม tie → PASS (+0.0 ผ่าน gate) — ตอนนี้ต้องดีขึ้นเกิน min-delta ถึงจะ PASS
     r = _result("base", em=5.0, f1=0.2)

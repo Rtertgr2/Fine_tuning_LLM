@@ -1,6 +1,6 @@
 # Audit Backlog Wave P0+P1+ML Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** ปิด audit waves P0 (3 ข้อ), P1 (10 ข้อ + 2 dispositions), ML logic (4 ข้อ) บน branch `fix/audit-backlog` — ทุกข้อ TDD, wave ละ 1 commit
 
@@ -42,22 +42,22 @@
 **Interfaces:**
 - Produces: `SFTConfig.logging_nan_inf_filter = False` — `StreamToQueueCallback.on_log` (`:253`) จะได้เห็น loss non-finite จริง (NanGuard เดิมถูก filter ก่อนถึง)
 
-- [ ] **Step 1: เพิ่ม assertion ใน `test_args_pin_hyperparams`**
+- [x] **Step 1: เพิ่ม assertion ใน `test_args_pin_hyperparams`**
 
 ```python
 assert args.logging_nan_inf_filter is False  # P0 A1: filter ปิด → NanGuard เห็น loss จริง
 ```
 
-- [ ] **Step 2: Run → FAIL**
+- [x] **Step 2: Run → FAIL**
 
 Run: `.venv/bin/python -m pytest tests/test_trainer_worker.py::test_args_pin_hyperparams -v`
 Expected: FAIL (`assert None/True is False` หรือ attribute error — ทั้งคู่แปลว่า test ยังไม่ผ่าน)
 
-- [ ] **Step 3: เพิ่ม `logging_nan_inf_filter=False` ใน `SFTConfig(...)` call ที่ `core/trainer_worker.py:103`**
+- [x] **Step 3: เพิ่ม `logging_nan_inf_filter=False` ใน `SFTConfig(...)` call ที่ `core/trainer_worker.py:103`**
 
 พร้อม comment สั้น ๆ อ้าง A1: transformers default True กรอง non-finite ก่อน on_log → NanGuard ไม่เคยทำงาน
 
-- [ ] **Step 4: Run → PASS**
+- [x] **Step 4: Run → PASS**
 
 Run: `.venv/bin/python -m pytest tests/test_trainer_worker.py::test_args_pin_hyperparams -v`
 Expected: PASS — ถ้า TypeError (unexpected keyword) = Review Focus #1 → **หยุด รายงาน ก่อนทำต่อ**
@@ -73,7 +73,7 @@ Expected: PASS — ถ้า TypeError (unexpected keyword) = Review Focus #1 �
 **Interfaces:**
 - Produces: dependency `on_start` มี `concurrency_id="model_load"` (group เดียวกับ predict/merge/eval ที่ `:386/:391/:396`)
 
-- [ ] **Step 1: เขียน test ล้มเหลวก่อน**
+- [x] **Step 1: เขียน test ล้มเหลวก่อน**
 
 ```python
 def test_dashboard_wires_start_in_model_load_group():
@@ -84,16 +84,16 @@ def test_dashboard_wires_start_in_model_load_group():
     assert on_start.get("concurrency_id") == "model_load"
 ```
 
-- [ ] **Step 2: Run → FAIL**
+- [x] **Step 2: Run → FAIL**
 
 Run: `.venv/bin/python -m pytest tests/test_ui_dashboard.py::test_dashboard_wires_start_in_model_load_group -v`
 Expected: FAIL (`None != 'model_load'` หรือ `api_name` ไม่พบ)
 
-- [ ] **Step 3: เพิ่ม `concurrency_id="model_load"` ใน `start_btn.click(...)` ที่ `ui/dashboard.py:374`**
+- [x] **Step 3: เพิ่ม `concurrency_id="model_load"` ใน `start_btn.click(...)` ที่ `ui/dashboard.py:374`**
 
 (ตรงกับ pattern M2 ที่ predict/merge/eval ใช้อยู่ — comment เดิมที่ `:383` ใช้ได้)
 
-- [ ] **Step 4: Run → PASS + test กลุ่ม dashboard**
+- [x] **Step 4: Run → PASS + test กลุ่ม dashboard**
 
 Run: `.venv/bin/python -m pytest tests/test_ui_dashboard.py -v`
 Expected: ทั้งไฟล์ PASS
@@ -111,7 +111,7 @@ Expected: ทั้งไฟล์ PASS
 - Produces (test double): `FakeTok.convert_tokens_to_ids(tok) -> int` — Task 6 จะใช้ต่อ
 - Produces: `pred` ไม่มี FIM marker (id 151659-61) → EM/F1 เทียบ baseline เดิมได้
 
-- [ ] **Step 1: เพิ่ม `convert_tokens_to_ids` ใน `FakeTok` (tests/test_evaluator.py)**
+- [x] **Step 1: เพิ่ม `convert_tokens_to_ids` ใน `FakeTok` (tests/test_evaluator.py)**
 
 ```python
 def convert_tokens_to_ids(self, tok: str) -> int:
@@ -134,12 +134,12 @@ def test_evaluate_cases_strips_fim_markers_from_pred():
 
 หมายเหตุ: `FIM` dict ในไฟล์นี้เป็น token strings อยู่แล้ว (`{"prefix": "<|fim_prefix|>", ...}`)
 
-- [ ] **Step 2: Run → FAIL**
+- [x] **Step 2: Run → FAIL**
 
 Run: `.venv/bin/python -m pytest tests/test_evaluator.py::test_evaluate_cases_strips_fim_markers_from_pred -v`
 Expected: FAIL (`exact is False` — pred มี `<![CDATA[EGIN]]>` หลงเหลือ / `<unk>`)
 
-- [ ] **Step 3: Implement id-filter ใน `evaluate_cases`**
+- [x] **Step 3: Implement id-filter ใน `evaluate_cases`**
 
 ```python
 def evaluate_cases(model, tokenizer, cases, *, fim_tokens, device, progress=None) -> dict
@@ -147,12 +147,12 @@ def evaluate_cases(model, tokenizer, cases, *, fim_tokens, device, progress=None
 ก่อน loop: `fim_ids = {tokenizer.convert_tokens_to_ids(t) for t in fim_tokens.values() if ...}`
 หลัง generate: กรอง `continuation` ให้เหลือ id ∉ fim_ids **ก่อน** `tokenizer.decode(...)` (decode เดิมที่ `:134` คงไว้ รวม `skip_special_tokens=True`) — filter แบบ list-of-int แล้วส่งเข้า decode (FakeTok/ของจริงรับทั้งคู่)
 
-- [ ] **Step 4: Run test ใหม่ + ทั้งไฟล์**
+- [x] **Step 4: Run test ใหม่ + ทั้งไฟล์**
 
 Run: `.venv/bin/python -m pytest tests/test_evaluator.py -v`
 Expected: PASS ทั้งไฟล์ (`test_evaluate_cases_prompt_equals_build_fim_prompt` ห้ามพัง)
 
-- [ ] **Step 5: Commit wave P0**
+- [x] **Step 5: Commit wave P0**
 
 ```bash
 git add core/trainer_worker.py ui/dashboard.py core/evaluator.py \
@@ -171,7 +171,7 @@ git commit -m "fix(p0): expose raw loss to NaN guard, lock Start behind model_lo
 **Interfaces:**
 - Produces: `SFTConfig.per_device_eval_batch_size == 1` · `StreamToQueueCallback.last_lr: float | None` (cache) — log ไม่มี `learning_rate` ครั้งแรก → WARNING log แทน metric ปลอม
 
-- [ ] **Step 1: เขียน test ล้มเหลวก่อน**
+- [x] **Step 1: เขียน test ล้มเหลวก่อน**
 
 ```python
 def test_args_eval_batch_equals_train():
@@ -197,18 +197,18 @@ def test_on_log_lr_never_seen_sends_warning_not_metric():
 
 หมายเหตุ: `_cb_with_states()` มีอยู่แล้วในไฟล์ (ใช้โดย `test_on_log_emits_metric`)
 
-- [ ] **Step 2: Run → FAIL ทั้ง 3**
+- [x] **Step 2: Run → FAIL ทั้ง 3**
 
 Run: `.venv/bin/python -m pytest tests/test_trainer_worker.py -k "eval_batch or lr_ or never_seen" -v`
 Expected: FAIL 3 ตัว
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 - `per_device_eval_batch_size=DEFAULT_BATCH_SIZE` ใน `SFTConfig(...)` (`:110 附近`)
 - `StreamToQueueCallback.__init__`: `self.last_lr: float | None = None`
 - `on_log` branch ที่มี `"loss"`: ถ้า `"learning_rate" in logs` → update `self.last_lr` แล้ว emit `metric_msg(lr=self.last_lr)`; ถ้า `self.last_lr is None` → `log_msg("WARNING", ...)` (raw logs ในข้อความ) **แล้วข้าม metric**; `self.guard.register(loss)` ต้องถูกเรียกทุกทางเสมอ (ห้าม skip NaN guard)
 
-- [ ] **Step 4: Run → PASS ทั้งไฟล์**
+- [x] **Step 4: Run → PASS ทั้งไฟล์**
 
 Run: `.venv/bin/python -m pytest tests/test_trainer_worker.py -v`
 Expected: PASS ทั้งไฟล์ (รวม `test_on_log_emits_metric`, `test_nan_trip_sends_error_and_stops`)
@@ -224,7 +224,7 @@ Expected: PASS ทั้งไฟล์ (รวม `test_on_log_emits_metric`, `
 **Interfaces:**
 - Produces: `safe_defaults.HF_HUB_REVISION: str = "main"` · `safe_defaults.HF_HUB_CACHE_DIR: str = "data_cache/hf_hub"` · hub call ใช้ `revision=` + `cache_dir=str(REPO_ROOT / HF_HUB_CACHE_DIR)` (REPO_ROOT มีอยู่แล้วใน estimator)
 
-- [ ] **Step 1: เขียน test ล้มเหลวก่อน**
+- [x] **Step 1: เขียน test ล้มเหลวก่อน**
 
 ```python
 def test_hub_config_fetch_pins_revision_and_cache(monkeypatch, tmp_path):
@@ -247,17 +247,17 @@ def test_hub_config_fetch_pins_revision_and_cache(monkeypatch, tmp_path):
 
 (เพิ่ม pin ใน `test_safe_defaults.py`: `assert sd.HF_HUB_REVISION == "main"`, `assert sd.HF_HUB_CACHE_DIR == "data_cache/hf_hub"`)
 
-- [ ] **Step 2: Run → FAIL**
+- [x] **Step 2: Run → FAIL**
 
 Run: `.venv/bin/python -m pytest tests/test_estimator.py::test_hub_config_fetch_pins_revision_and_cache tests/test_safe_defaults.py -v`
 Expected: FAIL (AttributeError `HF_HUB_REVISION` / `cache_dir` ไม่ถูกส่ง)
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 - คงที่ 2 ตัวใน `safe_defaults.py` หมวด Estimator + comment: revision เป็นจุดเปลี่ยนเดียวเมื่อต้องการ pin commit sha
 - เรียก `hf_hub_download(model_id, "config.json", revision=HF_HUB_REVISION, cache_dir=str(REPO_ROOT / HF_HUB_CACHE_DIR))`
 
-- [ ] **Step 4: Run → PASS**
+- [x] **Step 4: Run → PASS**
 
 Run: `.venv/bin/python -m pytest tests/test_estimator.py tests/test_safe_defaults.py -v`
 Expected: PASS ทั้ง 2 ไฟล์ (test เดิมที่ monkeypatch `hf_hub_download` ด้วย `*a, **k` ต้องรอด — ถ้าตัวไหนรับ positional ไม่ครบ ให้แก้ test นั้นรับ `**kw`)
@@ -274,7 +274,7 @@ Expected: PASS ทั้ง 2 ไฟล์ (test เดิมที่ monkeypat
 - Consumes: FakeTok จาก Task 3
 - Produces: ทุก call ใน `evaluate_cases` ใช้ `add_special_tokens=False` — model ที่เติม BOS ไม่ mismatch กับ packing ฝั่งเทรน
 
-- [ ] **Step 1: FakeTok `__call__` บันทึก kwargs + test ใหม่**
+- [x] **Step 1: FakeTok `__call__` บันทึก kwargs + test ใหม่**
 
 ```python
 # FakeTok.__call__ — เพิ่ม param + เก็บ record
@@ -293,14 +293,14 @@ def test_evaluate_cases_tokenizes_without_special_tokens():
     assert tok.captured_kwargs[0]["add_special_tokens"] is False  # P1 D2: ตรงฝั่งเทรน
 ```
 
-- [ ] **Step 2: Run → FAIL**
+- [x] **Step 2: Run → FAIL**
 
 Run: `.venv/bin/python -m pytest tests/test_evaluator.py::test_evaluate_cases_tokenizes_without_special_tokens -v`
 Expected: FAIL (`True is False` หรือ FakeTok `TypeError` ถ้ายังไม่เพิ่ม param)
 
-- [ ] **Step 3: เพิ่ม `add_special_tokens=False` ใน `tokenizer(prompt, return_tensors="pt")` ที่ `:127`**
+- [x] **Step 3: เพิ่ม `add_special_tokens=False` ใน `tokenizer(prompt, return_tensors="pt")` ที่ `:127`**
 
-- [ ] **Step 4: Run → PASS ทั้งไฟล์**
+- [x] **Step 4: Run → PASS ทั้งไฟล์**
 
 Run: `.venv/bin/python -m pytest tests/test_evaluator.py -v`
 Expected: PASS ทั้งไฟล์
@@ -316,7 +316,7 @@ Expected: PASS ทั้งไฟล์
 **Interfaces:**
 - Produces: `hardware._xpu_available() -> bool` (try/except `AttributeError, RuntimeError` → False) · `abort_process` ไม่เรียก `terminate()` เมื่อ process ตาย/ยังไม่ start (คืน True = ตายสนิทแล้ว)
 
-- [ ] **Step 1: เขียน test ล้มเหลวก่อน**
+- [x] **Step 1: เขียน test ล้มเหลวก่อน**
 
 ```python
 # tests/test_hardware.py
@@ -337,17 +337,17 @@ def test_abort_never_started_process_is_safe():
     assert ipc.abort_process(p) is True
 ```
 
-- [ ] **Step 2: Run → FAIL**
+- [x] **Step 2: Run → FAIL**
 
 Run: `.venv/bin/python -m pytest tests/test_hardware.py::test_missing_torch_xpu_attr_is_no_xpu tests/test_ipc_bridge.py::test_abort_never_started_process_is_safe -v`
 Expected: FAIL 2 ตัว (ตัวแรก fail เมื่อถึงขั้นเอา hasattr ออก — เขียน implement ให้เสร็จก่อนค่อยเช็ค; ตัวที่ 2 fail `AssertionError` leak ตอนนี้เลย)
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 - `hardware.py`: helper `_xpu_available()` = `try: return bool(torch.xpu.is_available()) except (AttributeError, RuntimeError): return False`; `inspect` เรียก helper แทน `hasattr(...) and ...` (`:23`)
 - `ipc_bridge.py`: ครอบ `terminate/join/kill` ด้วย `if process.is_alive():` — process ไม่มีชีวิต → ข้าม แล้ว `return not process.is_alive()`
 
-- [ ] **Step 4: Run → PASS ทั้ง 2 ไฟล์**
+- [x] **Step 4: Run → PASS ทั้ง 2 ไฟล์**
 
 Run: `.venv/bin/python -m pytest tests/test_hardware.py tests/test_ipc_bridge.py -v`
 Expected: PASS ทั้งคู่ (รวม `test_abort_escalates_to_kill`, `test_abort_no_kill_when_terminate_works` — ทั้งคู่เริ่ม alive=True → behavior คงเดิม)
@@ -363,7 +363,7 @@ Expected: PASS ทั้งคู่ (รวม `test_abort_escalates_to_kill`, 
 **Interfaces:**
 - Produces: `on_refresh_choices(model_value, dataset_value)` คืน `gr.Dropdown` 2 ตัวพร้อม `value=` คงค่าเดิม · wiring เพิ่ม `inputs=[model_in, dataset_in]` · app.py docstring อธิบายกลไกกัน stack จริง (concurrency_id + controller guard + tick locks) แทนการอ้าง `default_concurrency_limit`
 
-- [ ] **Step 1: แก้ test `test_on_refresh_choices_lists_detected_assets` ให้เรียกแบบมี args + assert instance**
+- [x] **Step 1: แก้ test `test_on_refresh_choices_lists_detected_assets` ให้เรียกแบบมี args + assert instance**
 
 ```python
     model_upd, dataset_upd = h["on_refresh_choices"]("custom-model", "custom-ds")
@@ -375,18 +375,18 @@ Expected: PASS ทั้งคู่ (รวม `test_abort_escalates_to_kill`, 
     # choices assertions เดิมทั้งหมดคงไว้
 ```
 
-- [ ] **Step 2: Run → FAIL**
+- [x] **Step 2: Run → FAIL**
 
 Run: `.venv/bin/python -m pytest tests/test_ui_dashboard.py::test_on_refresh_choices_lists_detected_assets -v`
 Expected: FAIL (`gr.update` dict ไม่ใช่ `gr.Dropdown` / ไม่มี `.value`)
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 - `on_refresh_choices(model_value, dataset_value)` → คืน `(gr.Dropdown(choices=[DEFAULT_MODEL_ID, *list_models()], value=model_value, allow_custom_value=True), gr.Dropdown(choices=[DEFAULT_DATASET_ID, *list_datasets()], value=dataset_value, allow_custom_value=True))`
 - wiring `:368`: `tab1.select(h["on_refresh_choices"], inputs=[model_in, dataset_in], outputs=[model_in, dataset_in])`
 - `app.py` docstring `:4` + comment `:41`: **ลบ `default_concurrency_limit=1` ออกจาก `demo.queue(...)`** (ค่า default อยู่แล้ว = no-op ตาม audit C2) และเขียน docstring ตามจริง: ตัวกัน Process Stacking จริง = `concurrency_id="model_load"` (dashboard) + re-entrancy guard ใน controller + tick ล็อกปุ่ม
 
-- [ ] **Step 4: Run → PASS + test app**
+- [x] **Step 4: Run → PASS + test app**
 
 Run: `.venv/bin/python -m pytest tests/test_ui_dashboard.py tests/test_app.py -v`
 Expected: PASS ทั้งคู่
@@ -402,7 +402,7 @@ Expected: PASS ทั้งคู่
 **Interfaces:**
 - Produces: `build_metric_plot` คืน `Figure` ที่มี legend (loss/val_loss/lr) และไม่แตะ `pyplot` global registry (ปลอดภัยบน Gradio threads)
 
-- [ ] **Step 1: เขียน test ล้มเหลวก่อน**
+- [x] **Step 1: เขียน test ล้มเหลวก่อน**
 
 ```python
 def test_build_metric_plot_has_legend_labels():
@@ -418,18 +418,18 @@ def test_build_metric_plot_has_legend_labels():
     assert {"loss", "val_loss", "lr"} <= labels
 ```
 
-- [ ] **Step 2: Run → FAIL**
+- [x] **Step 2: Run → FAIL**
 
 Run: `.venv/bin/python -m pytest tests/test_ui_components.py::test_build_metric_plot_has_legend_labels -v`
 Expected: FAIL (`after != before` — plt.subplots สร้าง fignum / legend เป็น None)
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 - แทน `plt.subplots(figsize=(7,3))`: `fig = Figure(figsize=(7, 3))` + `ax_loss = fig.add_subplot(111)` (import `Figure` มีอยู่แล้ว `:13`) — ลบ `import matplotlib.pyplot as plt` ถ้าไม่ใช้ที่อื่น
 - หลังวาด series ทั้งหมด: เก็บ handles/labels จาก `ax_loss` + `ax_lr` (twinx) แล้ว `ax_loss.legend(handles, labels, loc="best")`
 - test เดิม 3 ตัว (`two_axes`, `empty`, `val_points`) ต้องรอด — axes/lines API ไม่เปลี่ยน
 
-- [ ] **Step 4: Run → PASS ทั้งไฟล์**
+- [x] **Step 4: Run → PASS ทั้งไฟล์**
 
 Run: `.venv/bin/python -m pytest tests/test_ui_components.py -v`
 Expected: PASS ทั้งไฟล์
@@ -444,17 +444,17 @@ Expected: PASS ทั้งไฟล์
 **Interfaces:**
 - Produces: spec §3 มี 2 แถวเพิ่ม (disposition record — spec §7 บังคับ ไม่ปิดเงียบ)
 
-- [ ] **Step 1: Append 2 แถวในตาราง §3 (verify แล้ว 2026-10-05)**
+- [x] **Step 1: Append 2 แถวในตาราง §3 (verify แล้ว 2026-10-05)**
 
 | A5 | refs `including_emulation=True` ไม่มีจริง — โค้ดเป็น `bool(torch.xpu.is_bf16_supported())` (`trainer_worker.py:75`); fallback True+warning มีครบแล้ว | **dropped** — refs ผิด, native-only bf16 = ทางเลือกปลอดภัยแล้ว |
 | B4 | refs `iter_batches(batch_size=65536, row_groups=None)` ไม่มีจริง — โค้ดคือ `batch_size=64, columns=[column]` (`dataset_builder.py:236`) อ่าน bounded อยู่แล้ว | **dropped** — refs ผิด, ไม่มีอะไรต้องแก้ |
 
-- [ ] **Step 2: Full suite**
+- [x] **Step 2: Full suite**
 
 Run: `.venv/bin/python -m pytest -q`
 Expected: PASS ทั้งชุด (ไม่มี integration ตาม pytest.ini)
 
-- [ ] **Step 3: Commit wave P1**
+- [x] **Step 3: Commit wave P1**
 
 ```bash
 git add core/ ui/ configs/safe_defaults.py app.py \
@@ -473,7 +473,7 @@ git commit -m "fix(p1): eval batch=1, honest LR logging, hub revision/cache pin,
 **Interfaces:**
 - Produces: `token_f1(pred, gt, tokenizer) -> float` — คง signature เดิม (ผู้ใช้: `evaluate_cases`, `core/compression/llama_eval`) · semantics ใหม่: overlap = **longest common subsequence** ของ token ids (order mattered) · empty คู่ = 1.0, ฝั่งเดียวว่าง = 0.0 (คงเดิม)
 
-- [ ] **Step 1: แก้ test พฤติกรรมเก่า + เพิ่ม test ใหม่**
+- [x] **Step 1: แก้ test พฤติกรรมเก่า + เพิ่ม test ใหม่**
 
 ```python
 def test_token_f1_order_matters():          # RENAMED จาก test_token_f1_order_insensitive
@@ -489,12 +489,12 @@ def test_token_f1_shuffled_middle_not_perfect():
 
 `test_token_f1_partial_multiset` (คาด 2/3) — LCS(a a b, a b c)=2 → P=R=2/3 = ค่าเดิม **คงไว้ ไม่ต้องแก้**
 
-- [ ] **Step 2: Run → FAIL**
+- [x] **Step 2: Run → FAIL**
 
 Run: `.venv/bin/python -m pytest tests/test_evaluator.py -k "token_f1" -v`
 Expected: FAIL `test_token_f1_order_matters` (ได้ 1.0 จาก Counter multiset เดิม)
 
-- [ ] **Step 3: Implement LCS-based `token_f1`**
+- [x] **Step 3: Implement LCS-based `token_f1`**
 
 ```python
 def token_f1(pred: str, gt: str, tokenizer) -> float
@@ -503,7 +503,7 @@ def token_f1(pred: str, gt: str, tokenizer) -> float
 - `lcs = _lcs_length(pred_ids, gt_ids)`; empty cases คงเดิม; `p = lcs/len(pred)`, `r = lcs/len(gt)`, คืน harmonic mean
 - ลบ `Counter` import ถ้าไม่ใช้ที่อื่น
 
-- [ ] **Step 4: Run ทั้ง suite (รวม compression ที่ import `token_f1`)**
+- [x] **Step 4: Run ทั้ง suite (รวม compression ที่ import `token_f1`)**
 
 Run: `.venv/bin/python -m pytest tests/test_evaluator.py tests/test_compression_llama_eval.py -v`
 Expected: PASS — compression fixtures เป็น identical/empty → LCS คง 1.0/0.0
@@ -519,7 +519,7 @@ Expected: PASS — compression fixtures เป็น identical/empty → LCS ค
 **Interfaces:**
 - Produces: `eval.MIN_DELTA_EM_PCT: float = 0.1` · `eval.MIN_DELTA_F1: float = 0.01` · PASS ต้องมี delta ≥ min ทุก metric (tie = FAIL) · FAIL line ใหม่: `"FAIL — " + "; ".join(parts)` ซึ่ง parts เป็น `base better on: X` (regression) และ/หรือ `improvement below min-delta on: Y` (stall) — ชื่อ metric ทุกตัวต้องโผล่ในบรรทัด FAIL (spec §3.3 คงไว้)
 
-- [ ] **Step 1: แก้/เพิ่ม test**
+- [x] **Step 1: แก้/เพิ่ม test**
 
 ```python
 def test_compare_fail_on_tie(tmp_path, capsys):      # RENAMED จาก test_compare_pass_on_tie
@@ -544,18 +544,18 @@ def test_compare_fail_below_min_delta(tmp_path, capsys):
     assert cli_main(["--compare", "--eval-dir", eval_dir]) == 1
 ```
 
-- [ ] **Step 2: Run → FAIL**
+- [x] **Step 2: Run → FAIL**
 
 Run: `.venv/bin/python -m pytest tests/test_eval_cli.py -k "compare" -v`
 Expected: FAIL `test_compare_fail_on_tie` (เดิม assert rc==0) + 2 test ใหม่
 
-- [ ] **Step 3: Implement gate ใน `_run_compare` (eval.py:80-94)**
+- [x] **Step 3: Implement gate ใน `_run_compare` (eval.py:80-94)**
 
 - `passed = (fine_em - base_em >= MIN_DELTA_EM_PCT) and (fine_f1 - base_f1 >= MIN_DELTA_F1)`
 - สร้าง `parts`: delta < 0 → `base better on: ...`; `0 <= delta < min` → `improvement below min-delta on: ...` — join ด้วย `"; "` ขึ้นต้น `FAIL — `
 - `README.md:104`: เปลี่ยน `"ต้องไม่แย่กว่า base ทุก metric"` → `"ต้องดีขึ้นเกิน min-delta (EM ≥ +0.1pt, F1 ≥ +0.01) ทุก metric"`
 
-- [ ] **Step 4: Run → PASS**
+- [x] **Step 4: Run → PASS**
 
 Run: `.venv/bin/python -m pytest tests/test_eval_cli.py -v`
 Expected: PASS ทั้งไฟล์ (test qualitative/n-mismatch เดิมไม่กระทบ)
@@ -572,7 +572,7 @@ Expected: PASS ทั้งไฟล์ (test qualitative/n-mismatch เดิ�
 - Consumes: `latest_checkpoint(output_dir)` (มีอยู่แล้ว `:440`)
 - Produces: `trainer_worker.resume_checkpoint(output_dir: str | Path) -> str | None` · config key `"resume": bool` (optional — `validate_config` ไม่ต้องแก้) · widget `resume_in = gr.Checkbox(value=False, label="Resume from latest checkpoint")` ต่อท้าย `cfg_inputs` · `trainer.train(resume_from_checkpoint=...)` เสมอ (None = fresh)
 
-- [ ] **Step 1: เขียน test ล้มเหลวก่อน**
+- [x] **Step 1: เขียน test ล้มเหลวก่อน**
 
 ```python
 # tests/test_trainer_worker.py
@@ -605,12 +605,12 @@ def test_run_training_resume_without_checkpoint_starts_fresh(monkeypatch, tmp_pa
 
 (`_minimal_config` = dict config 9 keys เดิมจาก test `filters_heldout` เปลี่ยน output_dir เป็น tmp_path — validate_config อนุญาต system temp)
 
-- [ ] **Step 2: Run → FAIL**
+- [x] **Step 2: Run → FAIL**
 
 Run: `.venv/bin/python -m pytest tests/test_trainer_worker.py -k "resume" -v`
 Expected: FAIL (AttributeError `resume_checkpoint` / train ไม่ได้รับ kwargs)
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 - `resume_checkpoint`: ห่อ `latest_checkpoint` ด้วย try/ValueError → `None`
 - `run_training` ก่อน `trainer.train()` (`:418`):
@@ -622,7 +622,7 @@ Expected: FAIL (AttributeError `resume_checkpoint` / train ไม่ได้ร
 - Dashboard: `_collect_config(..., output_dir, resume: bool = False)` → เพิ่ม `"resume": bool(resume)` ใน config dict · เพิ่ม `resume_in` checkbox ต่อท้าย Tab1 หลัง `output_in` · เพิ่มใน `cfg_inputs` (handlers ทุกตัวรับผ่าน `*cfg_values` อัตโนมัติ)
 - test dashboard: `test_collect_config_tolerates_cleared_number_fields` (เรียก 10 positional → resume default False) ต้องรอด + เพิ่ม assert `config["resume"] is False` และ `_collect_config(...11 args...True)` → `is True`
 
-- [ ] **Step 4: Run → PASS ทั้ง 2 ไฟล์**
+- [x] **Step 4: Run → PASS ทั้ง 2 ไฟล์**
 
 Run: `.venv/bin/python -m pytest tests/test_trainer_worker.py tests/test_ui_dashboard.py -v`
 Expected: PASS ทั้งคู่
@@ -643,7 +643,7 @@ Expected: PASS ทั้งคู่
   - `filter_train_codes(codes)` — behavior เดิม (กรอง heldout) **บวก** ทิ้ง train ที่ near-dup กับ heldout · **ไม่แตะ `is_heldout`, ไม่แตะ heldout set (baseline คงเดิม)**
 - ข้อจำกัดที่ code ต้อง comment: inverted index จาก heldout shingles → ตัด shingle ที่ posting > `NEAR_DUP_MAX_POSTING` (บรรทัดสามัญ เช่น `}` — tradeoff: คู่ near-dup ที่มีแต่บรรทัดสามัญอาจหลุด) → candidate ต้องมี shared ≥ `ceil(t/(1+t)·(|A|+|B|))` → คำนวณ Jaccard จริง
 
-- [ ] **Step 1: เขียน test ล้มเหลวก่อน**
+- [x] **Step 1: เขียน test ล้มเหลวก่อน**
 
 ```python
 # tests/test_safe_defaults.py — เพิ่มใน block training
@@ -672,23 +672,23 @@ def test_filter_train_codes_drops_reindented_twin_of_heldout():
     assert db.filter_train_codes([heldout, twin, kept]) == result   # deterministic
 ```
 
-- [ ] **Step 2: Run → FAIL**
+- [x] **Step 2: Run → FAIL**
 
 Run: `.venv/bin/python -m pytest tests/test_dataset_builder.py -k "near_dup or reindented" tests/test_safe_defaults.py -v`
 Expected: FAIL (AttributeError `find_near_dup_leakage` / pin ขาด)
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 - คงที่ 2 ตัวใน `safe_defaults.py` (หมวด Dataset) — `_line_shingles` + `find_near_dup_leakage` ตาม Interfaces (algorithm: inverted index + posting cap + shared-count prune + exact Jaccard)
 - `filter_train_codes`: materialize → partition ด้วย `is_heldout` (เรียกครั้งเดียวต่อ code เก็บ tuple) → `train = [c for ...]`, `heldout = [c for ...]` → ทิ้ง `set(find_near_dup_leakage(train, heldout))` → คืน train คงลำดับเดิม
 - `run_training` (`trainer_worker.py:363` หลัง filter): `queue_.put(log_msg("INFO", f"train codes after filters: {len(codes)}"))` — test `filters_heldout` assert `messages[-1]` เป็น finished ยังรอด (log มาก่อน finished)
 
-- [ ] **Step 4: Run → PASS ทั้ง suite**
+- [x] **Step 4: Run → PASS ทั้ง suite**
 
 Run: `.venv/bin/python -m pytest -q`
 Expected: PASS ทั้งชุด — โดยเฉพาะ `test_filter_train_codes_removes_all_heldout` (fixture lines disjoint → ไม่โดนทิ้ง), `test_run_training_filters_heldout_from_iter_codes`, compression suite
 
-- [ ] **Step 5: Commit wave ML**
+- [x] **Step 5: Commit wave ML**
 
 ```bash
 git add core/ configs/safe_defaults.py eval.py README.md tests/
@@ -699,7 +699,7 @@ git commit -m "fix(ml): sequence-aware token-F1 (LCS), min-delta eval gate, resu
 
 ## Wave completion checks
 
-- [ ] ทุก wave commit แล้ว 3 commits (P0/P1/ML) · `git log --oneline -4` ตรง
-- [ ] `.venv/bin/python -m pytest -q` PASS ทั้งชุด
-- [ ] spec §3 มี disposition A5/B4/D11 ครบ (Task 10)
-- [ ] ไม่มีไฟล์นอก scope แก้ไข: `git status --short` สะอาด (ยกเว้น untracked เดิม)
+- [x] ทุก wave commit แล้ว 3 commits (P0/P1/ML) · `git log --oneline -4` ตรง
+- [x] `.venv/bin/python -m pytest -q` PASS ทั้งชุด
+- [x] spec §3 มี disposition A5/B4/D11 ครบ (Task 10)
+- [x] ไม่มีไฟล์นอก scope แก้ไข: `git status --short` สะอาด (ยกเว้น untracked เดิม)

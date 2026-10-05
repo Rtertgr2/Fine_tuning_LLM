@@ -39,6 +39,8 @@ directory ตาม domain (Approach B ที่เลือก) และ clean
 | D11 | doc §9 ชี้ `core/ipc_bridge.py::abort_process` ถูกต้องแล้ว | **dropped** (item ปลอม) — ทั้งข้อ D11 และบรรทัด "§9 ชี้ผิดไฟล์" ใน Doc list |
 | D2-doc | docs มี `add_special_tokens` จริง 5 ไฟล์ (รายงานบอก grep→0 ผิด) — แต่ **code mismatch train=False/eval=True จริง** | แก้ code (D2); ตรวจ claim ใน docs ตอน wave |
 | A1 | ไม่มี `logging_nan_inf_filter` ใน `trainer_worker.py` เลย → default True ตามที่รายงาน | **P0 ยังอยู่** ✅ |
+| M9-doc | `2026-10-02-phase5-eval-docs-design.md:107/:166` ยังนิยาม PASS = `fine ≥ base` + "ไม่ใส่ min-delta (wontfix)" | **override โดย M9 (fix(ml) 2026-10-05)** — audit spec นี้มีผลทับ: gate ปัจจุบันต้องดีขึ้นเกิน min-delta (EM ≥ +0.1pt, F1 ≥ +0.01, tie → FAIL) — ไฟล์ phase5 เป็น non-goal (ห้ามแก้) → ถือเป็นประวัติ ห้ามอ้างย้อนพฤติกรรมโค้ด |
+| M10-doc | `phase5-eval-docs-design.md:83/:131/:169` + `plans/2026-10-02-phase5-eval-docs.md:88` ยังเรียก token_f1 = "multiset / bag-of-tokens ไม่สนลำดับ" | **override โดย M10 (fix(ml) 2026-10-05)** — token_f1 = LCS-based sequence-aware แล้ว (order mattered) — ไฟล์ phase5 เป็น non-goal (ห้ามแก้) → ถือเป็นประวัติ ห้ามอ้างย้อนพฤติกรรมโค้ด |
 
 ## 4. Wave inventory & sequence
 

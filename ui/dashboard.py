@@ -269,7 +269,7 @@ def build_dashboard(controller) -> gr.Blocks:
 
         with gr.Tabs():
             # ---------------------------------------------------------- #
-            # Tab 1: Configuration & Pre-flight (9 ฟิลด์ + params fallback)
+            # Tab 1: Configuration & Pre-flight (10 ฟิลด์ + params fallback)
             # ---------------------------------------------------------- #
             with gr.Tab("Configuration & Pre-flight") as tab1:
                 with gr.Row():

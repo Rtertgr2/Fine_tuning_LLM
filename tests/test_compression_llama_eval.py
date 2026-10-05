@@ -12,7 +12,7 @@ FIM = {"prefix": "<PRE>", "suffix": "<SUF>", "middle": "<MID>"}
 
 
 class FakeTok:
-    """encode หยาบ ๆ พอให้ token_f1 ทำงาน (multiset ของ bytes)"""
+    """encode หยาบ ๆ พอให้ token_f1 ทำงาน (byte-level — sequence คงเดิม)"""
 
     def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
         return list(text.encode("utf-8"))

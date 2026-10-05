@@ -153,7 +153,7 @@ class EvalController:
 
 
 def _cfg_args():
-    """ค่า cfg ครบ 10 ช่องตาม cfg_inputs ของ build_dashboard"""
+    """ค่า cfg ครบ 11 ช่องตาม cfg_inputs ของ build_dashboard (รวม resume checkbox)"""
     return ("m/x", None, "ds", "col", "qwen", 8, 1024, 6, 64, "out")
 
 
@@ -367,6 +367,19 @@ def test_dashboard_wires_start_in_model_load_group():
     # anchor: predict/merge/eval อยู่ใน group เดิม (M2) — ยืนยันว่าอ่านถูกแหล่ง
     assert by_api["on_predict"].concurrency_id == "model_load"
     assert by_api["on_start"].concurrency_id == "model_load"
+
+
+def test_dashboard_wires_resume_checkbox_into_cfg_inputs():
+    """M8: resume checkbox ต้องอยู่ใน cfg_inputs ทุก handler — ถ้าหลุด → _collect_config
+    default False เงียบ ๆ (resume ไม่ทำงานแต่ suite เขียว)"""
+    demo = build_dashboard(FakeController())
+    cfg = demo.get_config_file()
+    assert any(c.get("type") == "checkbox" for c in cfg["components"])  # widget ถูกสร้าง
+    by_api = {d.api_name: d for d in demo.fns.values() if getattr(d, "api_name", None)}
+    for api in ("on_check", "on_start", "on_merge", "on_eval", "on_predict"):
+        assert any(
+            isinstance(w, gr.Checkbox) for w in by_api[api].inputs
+        ), f"{api} ไม่ได้รับ resume checkbox"
 
 
 def test_collect_config_resolves_local_model_name(monkeypatch, tmp_path):
