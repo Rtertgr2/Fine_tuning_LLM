@@ -126,7 +126,8 @@ def evaluate_cases(
     fim_ids = {tokenizer.convert_tokens_to_ids(t) for t in fim_tokens.values()}
     for i, case in enumerate(cases):
         prompt = build_fim_prompt(case.prefix, case.suffix, fim_tokens=fim_tokens)
-        inputs = tokenizer(prompt, return_tensors="pt")
+        # P1 D2: ตรงฝั่งเทรน (packing ไม่เติม special) — BOS ฝั่งเดียว = prompt บวม
+        inputs = tokenizer(prompt, return_tensors="pt", add_special_tokens=False)
         inputs = {k: v.to(device) for k, v in inputs.items()}
         with torch.no_grad():
             output_ids = model.generate(

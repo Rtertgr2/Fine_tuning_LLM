@@ -108,6 +108,8 @@ def build_training_args(
         eval_strategy="steps" if has_eval_dataset else "no",
         eval_steps=max(VAL_EVAL_MIN_STEPS, max_steps // 10),
         per_device_train_batch_size=DEFAULT_BATCH_SIZE,
+        # P1 A2: eval batch = train — default 8 + packing แถวยาวเต็ม → OOM ตอน eval
+        per_device_eval_batch_size=DEFAULT_BATCH_SIZE,
         gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
         learning_rate=LEARNING_RATE,
         warmup_steps=round(WARMUP_RATIO * max_steps),
@@ -228,6 +230,7 @@ class StreamToQueueCallback(TrainerCallback):
         self.queue = queue
         self.guard = NanGuard()
         self.aborted = False
+        self.last_lr: float | None = None  # P1 A3: ค่า lr ล่าสุดที่เห็นจริง — ห้ามเดาเป็น 0.0
 
     def on_log(self, args, state, control, logs, **kwargs):
         if "eval_loss" in logs:
@@ -244,14 +247,20 @@ class StreamToQueueCallback(TrainerCallback):
             self.queue.put(log_msg("INFO", str(logs)))
             return
         loss = logs["loss"]
-        self.queue.put(
-            metric_msg(
-                step=logs.get("step", state.global_step),
-                loss=loss,
-                lr=logs.get("learning_rate", 0.0),
-                epoch=logs.get("epoch", 0.0),
+        if "learning_rate" in logs:
+            self.last_lr = logs["learning_rate"]
+        if self.last_lr is None:
+            # P1 A3: ยังไม่เคยเห็น lr เลย → WARNING + raw logs แทน metric ปลอม (กราฟห้ามโกหก)
+            self.queue.put(log_msg("WARNING", f"loss log without learning_rate — raw: {logs}"))
+        else:
+            self.queue.put(
+                metric_msg(
+                    step=logs.get("step", state.global_step),
+                    loss=loss,
+                    lr=self.last_lr,
+                    epoch=logs.get("epoch", 0.0),
+                )
             )
-        )
         if self.guard.register(loss):
             self.queue.put(
                 error_msg(

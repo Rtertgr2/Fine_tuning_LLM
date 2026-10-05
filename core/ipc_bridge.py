@@ -98,9 +98,11 @@ def abort_process(process, *, timeout: float = ABORT_SIGTERM_TIMEOUT_S) -> bool:
     ทำงานกับ `multiprocessing.Process` หรือ object ที่มี
     `is_alive()/terminate()/kill()/join(timeout)` (duck-typed)
     """
-    process.terminate()
-    process.join(timeout)
+    # P1 D4: process ตายแล้ว/ยังไม่ start → ห้าม terminate (mp จริง raise AssertionError)
     if process.is_alive():
-        process.kill()
-        process.join(1.0)
+        process.terminate()
+        process.join(timeout)
+        if process.is_alive():
+            process.kill()
+            process.join(1.0)
     return not process.is_alive()

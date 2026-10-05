@@ -32,6 +32,8 @@ from configs.safe_defaults import (
     ESTIMATOR_FALLBACK_HIDDEN_SIZE,
     ESTIMATOR_FALLBACK_NUM_LAYERS,
     ESTIMATOR_OVERHEAD_GB,
+    HF_HUB_CACHE_DIR,
+    HF_HUB_REVISION,
     MAX_SEQ_LENGTH_DEFAULT,
     MODELS_DIR,
     RAM_MIN_GB,
@@ -154,7 +156,13 @@ def resolve_model_spec(model_id: str, user_params_b: float | None) -> ModelSpec:
         if local is not None:
             with open(local / "config.json", encoding="utf-8") as f:
                 return _spec_from_config(json.load(f), "local_config")
-        path = hf_hub_download(model_id, "config.json")
+        # P1 B1: pin revision (เปลี่ยนเป็น sha เมื่อต้องการตรึงแข็งกว่า) + cache ใต้ data_cache
+        path = hf_hub_download(
+            model_id,
+            "config.json",
+            revision=HF_HUB_REVISION,
+            cache_dir=str(REPO_ROOT / HF_HUB_CACHE_DIR),
+        )
         with open(path, encoding="utf-8") as f:
             return _spec_from_config(json.load(f), "hf_config")
     except (

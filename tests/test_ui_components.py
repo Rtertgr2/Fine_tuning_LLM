@@ -40,6 +40,21 @@ def test_build_metric_plot_val_points():
     assert list(val_lines[0].get_ydata()) == [0.9]
 
 
+def test_build_metric_plot_has_legend_and_no_pyplot_state():
+    """P1 C4: legend ต้องมี (แยก loss/val_loss/lr) · C5: ห้ามแตะ pyplot global state (Gradio threads)"""
+    import matplotlib.pyplot as plt
+
+    metrics = [metric_msg(1, 2.0, 2e-4, 0.1), val_metric_msg(step=5, epoch=0.4, val_loss=0.9)]
+    before = set(plt.get_fignums())
+    fig = build_metric_plot(metrics)
+    after = set(plt.get_fignums())
+    assert after == before  # C5: ไม่มี figure ใหม่ใน registry ของ pyplot
+    ax_loss = fig.axes[0]
+    assert ax_loss.get_legend() is not None  # C4: legend ต้องมีจริง
+    labels = {t.get_text() for t in ax_loss.get_legend().get_texts()}
+    assert {"loss", "val_loss", "lr"} <= labels
+
+
 def test_verdict_style_colors():
     assert verdict_style("safe") == ("safe", "#16a34a")
     assert verdict_style("warning") == ("warning", "#ca8a04")

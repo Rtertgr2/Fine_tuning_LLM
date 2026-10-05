@@ -124,3 +124,16 @@ def test_abort_no_kill_when_terminate_works():
     assert p.join_timeouts[0] == 10.0  # pin ABORT_SIGTERM_TIMEOUT_S
     assert p.kill_calls == 0  # ตายแล้วห้าม kill ซ้ำ
     assert dead is True
+
+
+class NeverStartedProcess(FakeProcess):
+    """mp.Process ที่ยังไม่ start → terminate() จริง raise AssertionError"""
+
+    def terminate(self) -> None:
+        raise AssertionError("can only terminate a started process")
+
+
+def test_abort_never_started_process_is_safe():
+    """P1 D4: terminate() ก่อน start = AssertionError → abort ต้องนิ่ง คืน True (ถือว่าตายแล้ว)"""
+    p = NeverStartedProcess(alive=False)  # is_alive False ทั้งที่ terminate จะพัง
+    assert ipc.abort_process(p) is True

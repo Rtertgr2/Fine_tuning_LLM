@@ -14,13 +14,24 @@ from configs.safe_defaults import DISK_MIN_GB, RAM_MIN_GB
 GB = 1024**3
 
 
+def _xpu_available() -> bool:
+    """เช็ค capability จริงของ XPU (P1 D3) — hasattr(torch,'xpu') ไม่ใช่ capability check
+
+    torch ไม่มี xpu module (AttributeError) หรือ driver ไม่พร้อม (RuntimeError) → False
+    """
+    try:
+        return bool(torch.xpu.is_available())
+    except (AttributeError, RuntimeError):
+        return False
+
+
 def inspect(output_dir: str = ".") -> dict:
     """ตรวจทรัพยากรระบบ คืน dict ตาม contract ของสเปก §4.1"""
     ram_available_gb = psutil.virtual_memory().available / GB
     disk_free_gb = psutil.disk_usage(output_dir).free / GB
 
     # (1) XPU ต้องมาก่อน — ไม่มี XPU คือ no_xpu ไม่ว่า RAM/disk จะเป็นอย่างไร
-    if not (hasattr(torch, "xpu") and torch.xpu.is_available()):
+    if not _xpu_available():
         return {
             "status": "no_xpu",
             "device_name": "",

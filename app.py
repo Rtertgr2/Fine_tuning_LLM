@@ -1,7 +1,9 @@
 """Gradio UI entry point — Phase 4 (สเปก plan.md §4.7 + §5 guardrails)
 
 - `mp.set_start_method("spawn")` ที่นี่ที่เดียว (§5 Driver Deadlock)
-- bind 127.0.0.1:7860 เท่านั้น + queue concurrency_limit=1 (§5 Network Exposure/Process Stacking)
+- bind 127.0.0.1:7860 เท่านั้น (§5 Network Exposure) — การกัน Process Stacking จริงอยู่ที่
+  `concurrency_id="model_load"` ของ predict/merge/eval/start (dashboard) + controller
+  re-entrancy guard + tick ล็อกปุ่ม — **ไม่ใช่** queue default (P1 C2: เดิมกล่าวอ้างเท็จ)
 - exit handler → `controller.exit()` ฆ่า child กัน orphan/XPU context leak (§5 Orphan Process)
 
 รัน: python app.py
@@ -38,7 +40,9 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
-    demo.queue(default_concurrency_limit=1)
+    # P1 C2: default_concurrency_limit เป็นค่า default อยู่แล้ว (ไม่มีผล) + limit จริงเป็นราย
+    # concurrency-id — ปล่อยค่า default ไม่แสร้งว่าเป็นเกราะป้องกัน
+    demo.queue()
     demo.launch(server_name=SERVER_HOST, server_port=SERVER_PORT)
 
 

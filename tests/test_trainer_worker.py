@@ -32,6 +32,11 @@ def test_args_pin_hyperparams():
     assert args.logging_nan_inf_filter is False  # P0 A1: filter ปิด → NanGuard เห็น loss จริง
 
 
+def test_args_eval_batch_equals_train():
+    args = wa.build_training_args("data_cache/x")
+    assert args.per_device_eval_batch_size == 1  # P1 A2: default 8 + packing = OOM ตอน eval
+
+
 def test_args_overrides_for_smoke():
     args = wa.build_training_args("out", max_steps=6, save_steps=2)
     assert args.max_steps == 6
@@ -157,6 +162,26 @@ def test_on_log_emits_metric():
     assert msg["step"] == 10
     assert msg["loss"] == 1.5
     assert msg["epoch"] == 0.2
+
+
+def test_on_log_without_lr_uses_cache_not_zero():
+    """P1 A3: lr หาย = อย่าโชว์ 0.0 เหมือนจริง — ใช้ค่าล่าสุดที่เห็นจริง"""
+    q, cb, state, control = _cb_with_states()
+    cb.on_log(None, state, control, {"loss": 1.5, "learning_rate": 2e-4, "step": 1})
+    cb.on_log(None, state, control, {"loss": 1.4, "step": 2})
+    metrics = [m for m in q.messages if m["type"] == "metric"]
+    assert len(metrics) == 2
+    assert metrics[1]["lr"] == 2e-4  # ใช้ cache — ไม่ใช่ 0.0
+
+
+def test_on_log_lr_never_seen_sends_warning_not_metric():
+    """P1 A3: ยังไม่เคยเห็น lr เลย → ห้าม emit metric ปลอม ต้องมี WARNING แทน"""
+    q, cb, state, control = _cb_with_states()
+    cb.on_log(None, state, control, {"loss": 1.5, "step": 1})
+    assert all(m["type"] != "metric" for m in q.messages)
+    warn = next(m for m in q.messages if m["type"] == "log")
+    assert warn["level"] == "WARNING" and "learning_rate" in warn["text"]
+    assert ipc.validate_message(warn) is True
 
 
 def test_status_flow():

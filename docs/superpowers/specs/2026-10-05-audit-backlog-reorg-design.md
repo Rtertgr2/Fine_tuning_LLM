@@ -33,8 +33,8 @@ directory ตาม domain (Approach B ที่เลือก) และ clean
 
 | ข้อ | ผล verify ที่ 82452d5 | Disposition |
 |---|---|---|
-| A5 | `trainer_worker.py:75` = `bool(torch.xpu.is_bf16_supported())` เปล่า ๆ — ไม่มี `including_emulation` ตามที่รายงานอ้าง | รายงาน refs ผิด → re-derive เหตุผลต้นฉบับตอน wave; หาไม่เจอ = **dropped** |
-| B4 | `dataset_builder.py:236` = `iter_batches(batch_size=64, columns=[column])` — ไม่มี `batch_size=65536` / `row_groups` | เหมือน A5: re-derive หรือ **dropped** |
+| A5 | `trainer_worker.py:75` = `bool(torch.xpu.is_bf16_supported())` เปล่า ๆ — ไม่มี `including_emulation` ตามที่รายงานอ้าง | **dropped** (re-derive + verify แล้ว 2026-10-05) — refs ผิด, ไม่มี substance ให้แก้; fallback True+warning (`:78-83`) มีครบ, native-only bf16 = ทางเลือกปลอดภัยแล้ว |
+| B4 | `dataset_builder.py:236` = `iter_batches(batch_size=64, columns=[column])` — ไม่มี `batch_size=65536` / `row_groups` | **dropped** (re-derive + verify แล้ว 2026-10-05) — refs ผิด, โค้ดอ่าน bounded อยู่แล้ว ไม่มีอะไรต้องแก้ |
 | D9 | peft 0.21.1: `utils/other.py` = 1,838 บรรทัด ✅ / ค่าจริงอยู่ `tuners/tuners_utils.py` (มีบรรทัด 2705 จริง) | audit แก้ refs ถูก → ใช้ refs ใหม่, substance ยังอยู่ใน P1/P2 |
 | D11 | doc §9 ชี้ `core/ipc_bridge.py::abort_process` ถูกต้องแล้ว | **dropped** (item ปลอม) — ทั้งข้อ D11 และบรรทัด "§9 ชี้ผิดไฟล์" ใน Doc list |
 | D2-doc | docs มี `add_special_tokens` จริง 5 ไฟล์ (รายงานบอก grep→0 ผิด) — แต่ **code mismatch train=False/eval=True จริง** | แก้ code (D2); ตรวจ claim ใน docs ตอน wave |

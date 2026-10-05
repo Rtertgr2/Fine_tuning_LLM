@@ -224,14 +224,23 @@ def _make_handlers(controller) -> dict:
         except Exception as exc:  # noqa: BLE001
             return f'<span style="color:#dc2626">**Merge failed:** {html.escape(str(exc))}</span>'
 
-    def on_refresh_choices():
+    def on_refresh_choices(model_value, dataset_value):
         """สลับมาแท็บ Configuration → detect โฟลเดอร์ models/ + datasets/ ใหม่
 
         dropdown ทั้งคู่: hub default + โฟลเดอร์ท้องถิ่นที่มีอยู่ ณ ตอนนั้น
+        P1 C3: คืน instance (gr.update = deprecated path ของ gradio 6) + value เดิมคงไว้
         """
         return (
-            gr.update(choices=[DEFAULT_MODEL_ID, *list_models()]),
-            gr.update(choices=[DEFAULT_DATASET_ID, *list_datasets()]),
+            gr.Dropdown(
+                choices=[DEFAULT_MODEL_ID, *list_models()],
+                value=model_value,
+                allow_custom_value=True,
+            ),
+            gr.Dropdown(
+                choices=[DEFAULT_DATASET_ID, *list_datasets()],
+                value=dataset_value,
+                allow_custom_value=True,
+            ),
         )
 
     return {
@@ -364,8 +373,12 @@ def build_dashboard(controller) -> gr.Blocks:
             model_in, params_in, dataset_in, column_in, fim_in,
             lora_in, seq_in, steps_in, code_limit_in, output_in,
         ]
-        # detect โฟลเดอร์ใหม่ทุกครั้งที่สลับมาแท็บนี้ (dropdown ทั้งคู่)
-        tab1.select(h["on_refresh_choices"], outputs=[model_in, dataset_in])
+        # detect โฟลเดอร์ใหม่ทุกครั้งที่สลับมาแท็บนี้ (dropdown ทั้งคู่ — ส่งค่าเดิมกลับด้วย กัน selection หาย)
+        tab1.select(
+            h["on_refresh_choices"],
+            inputs=[model_in, dataset_in],
+            outputs=[model_in, dataset_in],
+        )
 
         check_btn.click(
             h["on_check"], inputs=cfg_inputs,

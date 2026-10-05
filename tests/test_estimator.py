@@ -63,6 +63,26 @@ def test_resolve_from_config(monkeypatch, tmp_path):
     assert spec.source == "hf_config"
 
 
+def test_hub_config_fetch_pins_revision_and_cache(monkeypatch, tmp_path):
+    """P1 B1: ไม่ตรึง revision = config ขยับเงียบ ๆ; cache ต้องอยู่ใต้ data_cache (ไม่ใช่ ~/.cache)"""
+    from configs import safe_defaults as sd
+
+    target = tmp_path / "config.json"
+    target.write_text(json.dumps(FIXTURE_CONFIG), encoding="utf-8")
+    seen: dict = {}
+
+    def _fake(model_id, filename, **kw):
+        seen.update(kw)
+        return str(target)
+
+    monkeypatch.setattr(est, "hf_hub_download", _fake)
+    spec = est.resolve_model_spec("acme/pinned-model", None)
+    assert spec.source == "hf_config"
+    assert seen["revision"] == sd.HF_HUB_REVISION
+    assert seen["cache_dir"].endswith("data_cache/hf_hub")
+    assert str(est.REPO_ROOT) in seen["cache_dir"]  # absolute จาก repo root — ไม่ใช่ cwd
+
+
 def test_spec_counts_lm_head_when_untied(monkeypatch, tmp_path):
     # 🔴 Qwen2.5-7B มี tie_word_embeddings=false → lm_head แยก (vocab*d)
     # สูตรเดิมนับ vocab*d แค่ครั้งเดียว = undercount ~7% → น้ำหนักต่ำกว่าจริง ~1.1GB

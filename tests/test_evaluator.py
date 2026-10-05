@@ -20,6 +20,7 @@ class FakeTok:
     def __init__(self) -> None:
         self._vocab: dict[str, int] = {}
         self.captured_prompts: list[str] = []
+        self.captured_kwargs: list[dict] = []
 
     def encode(self, text: str, *, add_special_tokens: bool = False) -> list[int]:
         out: list[int] = []
@@ -37,8 +38,12 @@ class FakeTok:
         # P0 D1: evaluate_cases ใช้หา id ของ FIM marker เพื่อกรองออกจาก continuation
         return self.encode(tok)[0]
 
-    def __call__(self, prompt: str, *, return_tensors: str = "pt") -> dict:
+    def __call__(self, prompt: str, *, return_tensors: str = "pt",
+                 add_special_tokens: bool = True) -> dict:
         self.captured_prompts.append(prompt)
+        self.captured_kwargs.append(
+            {"return_tensors": return_tensors, "add_special_tokens": add_special_tokens}
+        )
         ids = torch.tensor([self.encode(prompt)])
         return {"input_ids": ids, "attention_mask": torch.ones_like(ids)}
 
@@ -244,6 +249,15 @@ def test_evaluate_cases_strips_fim_markers_from_pred():
     result = ev.evaluate_cases(model, tok, [case], fim_tokens=FIM, device="cpu")
     assert result["per_case"][0]["pred"] == "return 1"
     assert result["per_case"][0]["exact"] is True
+
+
+def test_evaluate_cases_tokenizes_without_special_tokens():
+    """P1 D2: train ใช้ packing + add_special_tokens=False → eval ต้องตรง ไม่งั้น prefix บวม"""
+    tok = FakeTok()
+    case = ev.EvalCase("def f():", "pass", "return 1")
+    model = FakeModel("return 1", tok)
+    ev.evaluate_cases(model, tok, [case], fim_tokens=FIM, device="cpu")
+    assert tok.captured_kwargs[0]["add_special_tokens"] is False  # P1 D2
 
 
 def test_evaluate_cases_aggregates_and_progress():

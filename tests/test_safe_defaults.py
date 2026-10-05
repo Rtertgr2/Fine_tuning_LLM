@@ -46,3 +46,6 @@ def test_ipc_and_training_blocks():
         "down_proj",
     )
     assert sd.TRAIN_CODE_LIMIT == 8192
+    # P1 B1: hub fetch pin — revision คงที่ + cache อยู่ใต้ data_cache
+    assert sd.HF_HUB_REVISION == "main"
+    assert sd.HF_HUB_CACHE_DIR == "data_cache/hf_hub"

@@ -326,12 +326,20 @@ def test_on_refresh_choices_lists_detected_assets(monkeypatch, tmp_path):
     monkeypatch.setattr(db, "DATASETS_DIR", str(data_root))
 
     h = _make_handlers(FakeController())
-    model_upd, dataset_upd = h["on_refresh_choices"]()
+    model_upd, dataset_upd = h["on_refresh_choices"]("custom-model", "custom-ds")
 
-    assert DEFAULT_MODEL_ID in model_upd["choices"]
-    assert "local-model" in model_upd["choices"]
-    assert DEFAULT_DATASET_ID in dataset_upd["choices"]
-    assert "local-ds" in dataset_upd["choices"]
+    # P1 C3: instance pattern — gr.update() เป็น deprecated path ของ gradio 6
+    assert isinstance(model_upd, gr.Dropdown)
+    assert isinstance(dataset_upd, gr.Dropdown)
+    assert model_upd.value == "custom-model"  # tab switch ห้ามล้าง selection
+    assert dataset_upd.value == "custom-ds"
+
+    model_choices = [c[0] for c in model_upd.choices]
+    dataset_choices = [c[0] for c in dataset_upd.choices]
+    assert DEFAULT_MODEL_ID in model_choices
+    assert "local-model" in model_choices
+    assert DEFAULT_DATASET_ID in dataset_choices
+    assert "local-ds" in dataset_choices
 
 
 def test_dashboard_wires_refresh_choices_on_tab1():

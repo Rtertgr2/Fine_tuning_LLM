@@ -33,6 +33,24 @@ def _patch(
     monkeypatch.setattr(hw.psutil, "disk_usage", lambda p: SimpleNamespace(free=disk_free))
 
 
+def test_missing_torch_xpu_attr_is_no_xpu(monkeypatch):
+    """P1 D3: hasattr(torch,'xpu') ไม่ใช่ capability check — เอาออกแล้ว behavior ต้องอยู่"""
+    monkeypatch.delattr(hw.torch, "xpu")
+    result = hw.inspect()
+    assert result["status"] == "no_xpu"
+
+
+def test_xpu_is_available_runtime_error_is_no_xpu(monkeypatch):
+    """P1 D3: is_available() raise (driver ไม่พร้อม/API หาย) → no_xpu ไม่ใช่ crash"""
+
+    def _boom():
+        raise RuntimeError("XPU driver not ready")
+
+    monkeypatch.setattr(hw.torch.xpu, "is_available", _boom)
+    result = hw.inspect()
+    assert result["status"] == "no_xpu"
+
+
 def test_contract_keys_and_types(monkeypatch):
     _patch(monkeypatch)
     result = hw.inspect()

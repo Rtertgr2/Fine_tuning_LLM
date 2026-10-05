@@ -9,7 +9,6 @@ import matplotlib
 
 matplotlib.use("Agg")  # ปลอดภัยทั้งตอน test และตอน Gradio ใช้คนละ thread
 
-import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 
 # สีตาม verdict — label คงเป็นค่า verdict เดิม (ห้ามแปลงเป็นข้อความอื่น)
@@ -27,8 +26,13 @@ def verdict_style(verdict: str) -> tuple[str, str]:
 
 
 def build_metric_plot(metrics: list[dict]) -> Figure:
-    """วาด Loss (แกนซ้าย) + LR (แกนขวา) จาก metric/val_metric ดิบ — ว่างก็คืน figure เปล่า"""
-    fig, ax_loss = plt.subplots(figsize=(7, 3))
+    """วาด Loss (แกนซ้าย) + LR (แกนขวา) จาก metric/val_metric ดิบ — ว่างก็คืน figure เปล่า
+
+    P1 C5: ใช้ Figure ตรง ๆ ไม่ผ่าน pyplot — plt.subplots() = global figure registry
+    ที่ Gradio threads หลายตัวแย่งกันเขียน (race); P1 C4: legend รวมทั้งสองแกน
+    """
+    fig = Figure(figsize=(7, 3))
+    ax_loss = fig.add_subplot(111)
     ax_lr = ax_loss.twinx()
 
     train = [m for m in metrics if "loss" in m]  # val_metric ไม่มี loss/lr
@@ -53,5 +57,12 @@ def build_metric_plot(metrics: list[dict]) -> Figure:
     ax_loss.set_ylabel("loss", color="#2563eb")
     ax_lr.set_ylabel("lr", color="#9333ea")
     ax_loss.set_title("Training metrics")
+    # C4: รวม handles จากทั้งสองแกน (twinx แยก collection — เอาเฉพาะแกนซ้ายจะหาย lr)
+    handles, labels = [], []
+    for ax in (ax_loss, ax_lr):
+        ax_handles, ax_labels = ax.get_legend_handles_labels()
+        handles += ax_handles
+        labels += ax_labels
+    ax_loss.legend(handles, labels, loc="best")
     fig.tight_layout()
     return fig
