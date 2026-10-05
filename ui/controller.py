@@ -23,23 +23,20 @@ from queue import Empty
 from typing import NamedTuple
 
 from configs.safe_defaults import MAX_SEQ_LENGTH_DEFAULT
-from core import hardware
-from core.estimator import EstimateResult, estimate
-from core.ipc_bridge import (
+from core.infra import hardware
+from core.infra.estimator import EstimateResult, estimate
+from core.infra.ipc_bridge import (
     TERMINAL_STATUSES,
     TRAINING_STATUSES,
     abort_process,
     validate_message,
     watchdog_error,
 )
-from core.evaluator import EVAL_DIR
-from core.trainer_worker import (
-    EVAL_DONE,
-    predict_middle,
-    run_eval_worker,
-    run_training,
-    validate_config,
-)
+from core.eval.evaluator import EVAL_DIR
+from core.eval.worker import EVAL_DONE, run_eval_worker
+from core.train.args import validate_config
+from core.train.predict import predict_middle
+from core.train.runner import run_training
 
 # `get_nowait()` ของ mp.Queue อาจคาย error อื่นนอกจาก Empty เมื่อ pipe ถูก kill กลางเขียน
 # (truncated pickle → EOFError/OSError/UnpicklingError) — ห้ามให้หลุดออกจาก tick() ไม่งั้น UI ค้างถาวร

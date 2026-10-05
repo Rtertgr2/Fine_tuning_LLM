@@ -17,7 +17,7 @@ import psutil
 import torch
 
 from configs.safe_defaults import DEFAULT_OUTPUT_DIR, DISK_MIN_GB, RAM_MIN_GB
-from core.hardware import existing_ancestor
+from core.infra.hardware import existing_ancestor
 
 GB = 1024**3
 

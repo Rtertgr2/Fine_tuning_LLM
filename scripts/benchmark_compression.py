@@ -16,6 +16,8 @@ from pathlib import Path
 # รันเป็น `python scripts/benchmark_compression.py` → sys.path[0] = scripts/ ต้องเพิ่ม root ก่อน
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from transformers import AutoTokenizer
+
 from configs.safe_defaults import (
     DEFAULT_DATASET_COLUMN,
     DEFAULT_DATASET_ID,
@@ -24,27 +26,26 @@ from configs.safe_defaults import (
     MAX_SEQ_LENGTH_DEFAULT,
     TRAIN_CODE_LIMIT,
 )
-from core.compression import CompressionError
-from core.compression.benchmark import run_bench
-from core.compression.config import (
+from core.compress import CompressionError
+from core.compress.benchmark import run_bench
+from core.compress.config import (
     DEFAULT_VARIANTS,
     VARIANT_BITS,
     report_path,
     require_tools,
     resolve_source,
 )
-from core.compression.llama_eval import evaluate_with_llama
-from core.compression.llama_runner import kv_cache_mb, start_server, stop_server
-from core.compression.quantizer import build_artifacts
-from core.compression.report import (
+from core.compress.llama_eval import evaluate_with_llama
+from core.compress.llama_runner import kv_cache_mb, start_server, stop_server
+from core.compress.quantizer import build_artifacts
+from core.compress.report import (
     build_report,
     format_table,
     pick_baseline,
     write_report,
 )
-from core.estimator import ModelSpecUnavailable, resolve_model_spec
-from core.evaluator import EVAL_MAX_NEW_TOKENS, build_eval_cases
-from core.trainer_worker import AutoTokenizer
+from core.infra.estimator import ModelSpecUnavailable, resolve_model_spec
+from core.eval.evaluator import EVAL_MAX_NEW_TOKENS, build_eval_cases
 
 # กันชน token พิเศษของ FIM prompt ที่อยู่เหนือ input budget (วัดจริง ≤6 โทเคน) —
 # server ctx ต้องครอบคลุม theoretical worst (budget + specials + EVAL_MAX_NEW_TOKENS) เสมอ

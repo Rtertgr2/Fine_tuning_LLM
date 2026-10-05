@@ -26,7 +26,7 @@ from configs.safe_defaults import (
     MAX_STEPS,
     TRAIN_CODE_LIMIT,
 )
-from core import evaluator as ev
+from core.eval import evaluator as ev
 
 # M9: gate ต้องมี min-delta — +0.0 (tie) ห้าม PASS: ต้องดีขึ้นอย่างมีนัยทุก metric
 # EM: n=100 → 1 case = 1.0pt — 0.1pt = ต่ำกว่า 1 case ก็ยังยอมรับได้ แต่ 0.0 ไม่ผ่าน

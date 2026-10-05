@@ -29,8 +29,8 @@ from configs.safe_defaults import (
     LORA_RANK_DEFAULT,
     MAX_SEQ_LENGTH_DEFAULT,
 )
-from core.ipc_bridge import abort_process, validate_message
-from core.trainer_worker import run_training
+from core.infra.ipc_bridge import abort_process, validate_message
+from core.train.runner import run_training
 
 DEADLINE_S = 600.0
 VRAM_TOLERANCE_GB = 0.5

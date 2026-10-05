@@ -24,8 +24,8 @@ from configs.safe_defaults import (
     MAX_STEPS,
     TRAIN_CODE_LIMIT,
 )
-from core import evaluator as ev
-from core import hardware as hw
+from core.eval import evaluator as ev
+from core.infra import hardware as hw
 from ui.controller import TrainingController
 
 pytestmark = pytest.mark.integration

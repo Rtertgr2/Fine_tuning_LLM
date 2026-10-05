@@ -23,10 +23,10 @@ from configs.safe_defaults import (
     MAX_STEPS,
     TRAIN_CODE_LIMIT,
 )
-from core import evaluator as ev
-from core.dataset_builder import list_datasets
-from core.estimator import list_models, resolve_local_model
-from core.trainer_worker import merge_export, save_adapter_only
+from core.eval import evaluator as ev
+from core.data.dataset_builder import list_datasets
+from core.infra.estimator import list_models, resolve_local_model
+from core.train.export import merge_export, save_adapter_only
 from ui.components import build_metric_plot, verdict_style
 from ui.controller import run_predict
 

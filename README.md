@@ -167,12 +167,23 @@ bash scripts/setup_llamacpp.sh
 
 ```
 core/
-  hardware.py        # ตรวจ RAM/VRAM/Disk/Driver ก่อนอนุญาตให้เทรน
-  estimator.py       # ประมาณการ VRAM ก่อนเริ่ม (static + fallback จาก HF config)
-  dataset_builder.py # แปลงโค้ดดิบเป็น FIM (PSM, line boundary, seed 42) + heldout split
-  ipc_bridge.py      # message protocol 4 ประเภท + watchdog + abort escalation
-  trainer_worker.py  # build_training_args, guardrails, callback, run_training, eval worker
-  evaluator.py       # build_eval_cases, Exact Match + Token F1, run_eval, compare_results
+  infra/            hardware    # ตรวจ RAM/VRAM/Disk/Driver ก่อนอนุญาตให้เทรน
+                    estimator   # ประมาณการ VRAM ก่อนเริ่ม (static + fallback จาก HF config)
+                    ipc_bridge  # message protocol 4 ประเภท + watchdog + abort escalation
+                    sandbox     # project roots + path sandbox (H1)
+  data/
+    dataset_builder.py # แปลงโค้ดดิบเป็น FIM (PSM, line boundary, seed 42) + heldout split
+    fim.py             # ensure_fim_tokens guard + build_fim_prompt (PSM)
+  eval/
+    evaluator.py    # build_eval_cases, Exact Match + Token F1, run_eval, compare_results
+    worker.py       # run_eval_worker (spawn target) + EVAL_DONE marker
+  train/
+    args.py         # build_training_args, validate_config, available_lora_targets (safe_defaults)
+    callbacks.py    # NanGuard, AtomicSaveTrainer (checkpoint atomic), StreamToQueueCallback
+    runner.py       # run_training + checkpoint helpers (commit/latest/resume)
+    export.py       # save_adapter_only, merge_export (spawn targets)
+    predict.py      # predict_middle (spawn target)
+  compress/         # llama.cpp/GGUF path — config, quantizer, benchmark, llama_runner, llama_eval, report
 configs/
   safe_defaults.py   # ค่าคงที่ของระบบทั้งหมด (pin ด้วย test)
   fim_registry.json  # FIM tokens ต่อ family (qwen/starcoder/deepseek)
@@ -180,7 +191,7 @@ ui/
   controller.py      # TrainingController — start/abort/tick/run_predict/run_eval (ไม่ import gradio)
   dashboard.py       # Gradio Blocks 3 แท็บ + event wiring
 scripts/             # check_runtime, smoke_sft, pipeline_smoke
-tests/               # pytest (unit + integration marker)
+tests/               # pytest — mirror: tests/{infra,data,train,eval,compress,ui}/ + root (integration)
 eval.py              # CLI eval — --mode base|finetuned, --compare
 app.py               # entry point (spawn method + bind 127.0.0.1:7860)
 docs/                # spec + implementation plan ราย phase
