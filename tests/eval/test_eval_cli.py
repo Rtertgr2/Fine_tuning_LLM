@@ -33,6 +33,15 @@ def test_min_delta_constants_pinned():
     assert eval_module.MIN_DELTA_F1 == 0.01
 
 
+def test_help_reflects_eval_n_cases(monkeypatch, capsys):
+    """review minor (a): help ห้าม hardcode default 100 — ต้องตาม EVAL_N_CASES จริง"""
+    import eval as eval_module
+
+    monkeypatch.setattr(eval_module, "EVAL_N_CASES", 42)
+    assert cli_main(["--help"]) == 0
+    assert "default 42" in capsys.readouterr().out
+
+
 def test_import_eval_and_evaluator_do_not_load_torch():
     """D10: --compare เป็น pure stdlib — `import eval` ห้ามดึง torch+transformers+peft+trl ทั้งชุด"""
     import subprocess

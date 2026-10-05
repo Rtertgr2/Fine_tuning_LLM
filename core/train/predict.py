@@ -1,5 +1,5 @@
 """Playground inference — predict_middle (spawn target, §5 VRAM)
-แยกจาก core/trainer_worker.py (Approach B split)
+แยกจาก trainer_worker.py เดิม (Approach B split)
 """
 
 from __future__ import annotations
@@ -48,10 +48,9 @@ def predict_middle(config: dict, prefix: str, suffix: str, queue_) -> None:
         prompt = build_fim_prompt(prefix, suffix, fim_tokens=fim_tokens)
         inputs = tokenizer(prompt, return_tensors="pt")
         inputs = {k: v.to(device) for k, v in inputs.items()}
-        with torch.no_grad():
-            output_ids = model.generate(
-                **inputs, max_new_tokens=256, do_sample=False
-            )
+        output_ids = model.generate(
+            **inputs, max_new_tokens=256, do_sample=False
+        )
         continuation = output_ids[0][inputs["input_ids"].shape[1] :]
         text = tokenizer.decode(continuation, skip_special_tokens=True)
         queue_.put(log_msg("INFO", text))

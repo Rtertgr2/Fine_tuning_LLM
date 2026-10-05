@@ -424,7 +424,7 @@ def test_quant_gate_constants_pinned():
 
 
 def _row(variant, em, f1):
-    # key ตรง build_report (core/compression/report.py:41,:54,:55) — verified
+    # key ตรง build_report (core/compress/report.py:41,:54,:55) — verified
     return {"variant": variant, "exact_match_pct": em, "token_f1": f1}
 
 

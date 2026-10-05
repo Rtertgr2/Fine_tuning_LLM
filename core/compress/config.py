@@ -22,7 +22,7 @@ DEFAULT_VARIANTS: tuple[str, ...] = ("fp16", "q8_0", "q4_k_m")
 QUANT_TYPE: dict[str, str] = {"q8_0": "Q8_0", "q4_k_m": "Q4_K_M"}
 VARIANT_BITS: dict[str, int] = {"fp16": 16, "q8_0": 8, "q4_k_m": 4}
 
-# repo root จากตำแหน่งไฟล์นี้ (core/compression/config.py → ขึ้น 2 ชั้น) — ตรงกับที่
+# repo root จากตำแหน่งไฟล์นี้ (core/compress/config.py → ขึ้น 2 ชั้น) — ตรงกับที่
 # setup_llamacpp.sh ติดตั้ง (`$0/..`) เรียก CLI จาก directory อื่นก็หา tools เจอ (Review #5)
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 

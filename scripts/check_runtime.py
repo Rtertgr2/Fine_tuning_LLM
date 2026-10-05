@@ -11,7 +11,8 @@ from pathlib import Path
 
 # รันเป็น `python scripts/check_runtime.py` → sys.path[0] = scripts/ ต้องเพิ่ม root ก่อน
 # (try/except ImportError เดิมเคยกลืนปัญหานี้เงียบ ๆ — Standards-3 เอาออกแล้วต้องแก้ที่ต้นเหตุ)
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
 
 import psutil
 import torch
@@ -42,9 +43,14 @@ def main() -> int:
         failures.append("VRAM values are invalid (total <= 0 or free < 0)")
 
     # (3) RAM + disk ตาม threshold — disk วัดบน ancestor ที่มีอยู่จริง (output dir อาจยังไม่ถูกสร้าง — D6)
+    # path ผูกครั้งเดียว + anchor ที่ repo root — รันจาก CWD อื่นก็วัด disk ถูกที่
+    output_dir = Path(DEFAULT_OUTPUT_DIR)
+    if not output_dir.is_absolute():
+        output_dir = REPO_ROOT / output_dir
+    disk_ancestor = existing_ancestor(output_dir)
     ram_avail = psutil.virtual_memory().available / GB
-    disk_free = psutil.disk_usage(existing_ancestor(DEFAULT_OUTPUT_DIR)).free / GB
-    print(f"disk path       : {existing_ancestor(DEFAULT_OUTPUT_DIR)}")
+    disk_free = psutil.disk_usage(disk_ancestor).free / GB
+    print(f"disk path       : {disk_ancestor}")
     print(f"ram available   : {ram_avail:.2f} GB (min {RAM_MIN_GB})")
     print(f"disk free       : {disk_free:.2f} GB (min {DISK_MIN_GB})")
     if ram_avail < RAM_MIN_GB:

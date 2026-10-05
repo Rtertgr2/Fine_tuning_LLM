@@ -1,4 +1,4 @@
-"""Guardrails + UI queue callback (สเปก plan.md §4.4/§4.5 — แยกจาก core/trainer_worker.py)
+"""Guardrails + UI queue callback (สเปก plan.md §4.4/§4.5 — แยกจาก trainer_worker.py เดิม)
 
 NanGuard (NaN streak) + AtomicSaveTrainer (checkpoint atomic) + StreamToQueueCallback
 """

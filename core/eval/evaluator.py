@@ -128,8 +128,6 @@ def evaluate_cases(
 ) -> dict:
     """generate middle ต่อ case แบบ greedy → คำนวณ Exact Match + Token F1"""
     # lazy import: --compare ห้ามดึง torch/transformers (D10)
-    import torch
-
     from core.data.fim import build_fim_prompt
 
     per_case: list[dict] = []
@@ -141,10 +139,9 @@ def evaluate_cases(
         # P1 D2: ตรงฝั่งเทรน (packing ไม่เติม special) — BOS ฝั่งเดียว = prompt บวม
         inputs = tokenizer(prompt, return_tensors="pt", add_special_tokens=False)
         inputs = {k: v.to(device) for k, v in inputs.items()}
-        with torch.no_grad():
-            output_ids = model.generate(
-                **inputs, max_new_tokens=EVAL_MAX_NEW_TOKENS, do_sample=False
-            )
+        output_ids = model.generate(
+            **inputs, max_new_tokens=EVAL_MAX_NEW_TOKENS, do_sample=False
+        )
         continuation = output_ids[0][inputs["input_ids"].shape[1] :]
         kept = [int(t) for t in continuation.tolist() if int(t) not in fim_ids]
         pred = tokenizer.decode(kept, skip_special_tokens=True)

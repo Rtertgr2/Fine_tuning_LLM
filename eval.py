@@ -141,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--mode", choices=["base", "finetuned"], help="run one eval mode")
     group.add_argument("--compare", action="store_true", help="compare saved results")
-    parser.add_argument("--n-cases", type=int, default=EVAL_N_CASES, help="eval set size (default 100)")
+    parser.add_argument("--n-cases", type=int, default=EVAL_N_CASES, help=f"eval set size (default {EVAL_N_CASES})")
     parser.add_argument("--eval-dir", type=Path, default=ev.EVAL_DIR, help="where JSON results live")
     parser.add_argument("--output-dir", default=_DEFAULT_OUTPUT_DIR, help="training output dir (finetuned mode)")
     parser.add_argument("--fim-key", default="qwen", help="FIM registry key (default qwen)")

@@ -1,4 +1,4 @@
-"""Shared test helpers — ย้ายจาก tests/test_trainer_worker.py (Approach B split)"""
+"""Shared test helpers — ย้ายจาก test_trainer_worker.py เดิม (Approach B split)"""
 
 
 class FakeQueue:

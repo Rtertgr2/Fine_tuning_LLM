@@ -74,7 +74,7 @@ def _collect(proc: mp.Process, q: mp.Queue, *, stop, deadline_s: float) -> list[
             if not proc.is_alive():
                 break
             continue
-        assert validate_message(msg), f"message รูปผิด: {msg!r}"
+        assert validate_message(msg), f"malformed message: {msg!r}"
         msgs.append(msg)
         if stop(msg):
             break
@@ -83,7 +83,7 @@ def _collect(proc: mp.Process, q: mp.Queue, *, stop, deadline_s: float) -> list[
 
 def mode_full() -> None:
     free_before = _free_vram_gb()
-    print(f"[full] VRAM free ก่อน spawn: {free_before:.2f} GB")
+    print(f"[full] VRAM free before spawn: {free_before:.2f} GB")
     out_dir = Path("data_cache/phase3_full")
     shutil.rmtree(out_dir, ignore_errors=True)  # ล้างของเก่า — ไม่งั้น assert ถูก satisfy โดย leftover
     proc, q = _spawn(_base_config(str(out_dir), max_steps=6, save_steps=2))
@@ -98,41 +98,41 @@ def mode_full() -> None:
 
     states = [m["state"] for m in msgs if m["type"] == "status"]
     for required in ("starting", "training", "finished"):
-        assert required in states, f"ขาด status {required}: {states}"
-    assert any(m["type"] == "metric" for m in msgs), "ไม่มี metric เลย"
+        assert required in states, f"missing status {required}: {states}"
+    assert any(m["type"] == "metric" for m in msgs), "no metric at all"
     checkpoints = sorted(out_dir.glob("checkpoint-*"))
-    assert checkpoints, f"ไม่มี checkpoint ใน {out_dir}"
-    assert not list(out_dir.rglob("*.saving")), "*.saving ค้าง — atomic save ไม่ผ่าน"
+    assert checkpoints, f"no checkpoint in {out_dir}"
+    assert not list(out_dir.rglob("*.saving")), "leftover *.saving — atomic save failed"
     time.sleep(2)  # ให้ driver reclaim VRAM ก่อนวัด (เทียบทุก mode ตาม plan)
     free_after = _free_vram_gb()
     assert free_after >= free_before - VRAM_TOLERANCE_GB, (
-        f"VRAM ไม่คืน: ก่อน {free_before:.2f} GB → หลัง {free_after:.2f} GB "
-        f"(เกิน tolerance {VRAM_TOLERANCE_GB} GB)"
+        f"VRAM not freed: before {free_before:.2f} GB → after {free_after:.2f} GB "
+        f"(exceeds tolerance {VRAM_TOLERANCE_GB} GB)"
     )
-    print(f"[full] VRAM free หลัง exit: {free_after:.2f} GB (คืนแล้ว)")
+    print(f"[full] VRAM free after exit: {free_after:.2f} GB (returned)")
     print("[full] OK")
 
 
 def mode_abort() -> None:
     free_before = _free_vram_gb()
-    print(f"[abort] VRAM free ก่อน spawn: {free_before:.2f} GB")
+    print(f"[abort] VRAM free before spawn: {free_before:.2f} GB")
     out_dir = Path("data_cache/phase3_abort")
     shutil.rmtree(out_dir, ignore_errors=True)  # ล้างของเก่า เหมือน mode_full
     proc, q = _spawn(_base_config(str(out_dir), max_steps=500, save_steps=100))
     msgs = _collect(
         proc, q, stop=lambda m: m["type"] == "metric", deadline_s=DEADLINE_S
     )
-    assert any(m["type"] == "metric" for m in msgs), "ไม่ถึง metric ตัวแรกก่อน abort"
-    assert abort_process(proc) is True, "abort_process ไม่คืน True"
+    assert any(m["type"] == "metric" for m in msgs), "first metric not reached before abort"
+    assert abort_process(proc) is True, "abort_process did not return True"
     proc.join()
-    assert not proc.is_alive(), "process ยังไม่ตายสนิท"
+    assert not proc.is_alive(), "process not fully dead"
     time.sleep(2)  # ให้ driver reclaim VRAM ก่อนวัด
     free_after = _free_vram_gb()
     assert free_after >= free_before - VRAM_TOLERANCE_GB, (
-        f"VRAM ไม่คืน: ก่อน {free_before:.2f} GB → หลัง {free_after:.2f} GB "
-        f"(เกิน tolerance {VRAM_TOLERANCE_GB} GB)"
+        f"VRAM not freed: before {free_before:.2f} GB → after {free_after:.2f} GB "
+        f"(exceeds tolerance {VRAM_TOLERANCE_GB} GB)"
     )
-    print(f"[abort] VRAM free หลัง exit: {free_after:.2f} GB (คืนแล้ว)")
+    print(f"[abort] VRAM free after exit: {free_after:.2f} GB (returned)")
     print("[abort] OK")
 
 

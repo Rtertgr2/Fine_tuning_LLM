@@ -56,8 +56,6 @@ def test_save_adapter_only_copies_shards(tmp_path):
 
 def test_save_adapter_only_rejects_output_outside_sandbox(tmp_path, monkeypatch):
     """Sec-10: on_save_adapter ไม่ผ่าน validate_config → คัดลอกจากนอก sandbox ได้ — H1 rule ต้อง applied ที่ save (คุ้มครองทุก caller)"""
-    import tempfile
-
     run = tmp_path / "run"
     ckpt = run / "checkpoint-3"
     ckpt.mkdir(parents=True)                    # fixture ลอกจาก test_save_adapter_only_copies (:347-350)

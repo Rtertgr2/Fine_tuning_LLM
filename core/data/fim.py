@@ -1,5 +1,5 @@
 """FIM helpers — ensure_fim_tokens (vocab guard) + build_fim_prompt (PSM)
-แยกจาก core/trainer_worker.py (Approach B split)
+แยกจาก trainer_worker.py เดิม (Approach B split)
 """
 
 from __future__ import annotations

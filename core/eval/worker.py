@@ -1,4 +1,4 @@
-"""Eval worker — spawn target สำหรับ eval (process แยก) — แยกจาก core/trainer_worker.py
+"""Eval worker — spawn target สำหรับ eval (process แยก) — แยกจาก trainer_worker.py เดิม
 
 progress → log_msg, จบ → EVAL_DONE
 """

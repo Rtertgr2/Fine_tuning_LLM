@@ -1,4 +1,4 @@
-"""Training runner — run_training + atomic checkpoint helpers (แยกจาก core/trainer_worker.py)
+"""Training runner — run_training + atomic checkpoint helpers (แยกจาก trainer_worker.py เดิม)
 
 flow: validate → starting → โหลด registry/tokenizer/dataset/model → LoRA SFT → finished
 """

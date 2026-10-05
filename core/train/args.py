@@ -1,4 +1,4 @@
-"""Training args factory + config guards (สเปก plan.md §4.4 — แยกจาก core/trainer_worker.py)
+"""Training args factory + config guards (สเปก plan.md §4.4 — แยกจาก trainer_worker.py เดิม)
 
 ส่วน `build_training_args` — config factory ทุกค่ามาจาก
 `configs/safe_defaults.py` (ห้าม hardcode ซ้ำ)

@@ -1,4 +1,4 @@
-"""Tests สำหรับ core/evaluator.py — FIM Exact Match, Token F1, EvalCase (spec §3.2)"""
+"""Tests สำหรับ core/eval/evaluator.py — FIM Exact Match, Token F1, EvalCase (spec §3.2)"""
 
 import dataclasses
 import json

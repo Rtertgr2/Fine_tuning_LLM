@@ -363,7 +363,7 @@ def build_dashboard(controller) -> gr.Blocks:
                 )
                 eval_error_md = gr.Markdown("")
 
-        timer = gr.Timer(value=1.0, active=True)
+        timer = gr.Timer(value=1.0)
 
         # -------------------------------------------------------------- #
         # Wiring (ต้องอยู่ใน Blocks context — gradio 6 บังคับ)

@@ -1,5 +1,5 @@
 """Export workers — save_adapter_only (LoRA files) + merge_export (full weights)
-แยกจาก core/trainer_worker.py (spawn targets ใน process แยก — §5 VRAM)
+แยกจาก trainer_worker.py เดิม (spawn targets ใน process แยก — §5 VRAM)
 """
 
 from __future__ import annotations
