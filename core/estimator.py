@@ -152,9 +152,13 @@ def resolve_model_spec(model_id: str, user_params_b: float | None) -> ModelSpec:
             DEFAULT_MODEL_VOCAB_SIZE,
         )
     local = resolve_local_model(model_id)
+    detail = f"hub config.json for {model_id!r}"  # B6: บอกไฟล์เสมอ ทุก branch
+    lookup_reason: str
     try:
         if local is not None:
-            with open(local / "config.json", encoding="utf-8") as f:
+            cfg_path = local / "config.json"
+            detail = str(cfg_path)
+            with open(cfg_path, encoding="utf-8") as f:
                 return _spec_from_config(json.load(f), "local_config")
         # P1 B1: pin revision (เปลี่ยนเป็น sha เมื่อต้องการตรึงแข็งกว่า) + cache ใต้ data_cache
         path = hf_hub_download(
@@ -163,20 +167,21 @@ def resolve_model_spec(model_id: str, user_params_b: float | None) -> ModelSpec:
             revision=HF_HUB_REVISION,
             cache_dir=str(REPO_ROOT / HF_HUB_CACHE_DIR),
         )
+        detail = str(path)
         with open(path, encoding="utf-8") as f:
             return _spec_from_config(json.load(f), "hf_config")
     except (
         OSError,  # offline/HTTP: hub 1.x — HfHubHTTPError, LocalEntryNotFoundError ⊂ OSError
         ValueError,  # JSONDecodeError, HFValidationError, int("x")
-        TypeError,  # int(None)
-        KeyError,  # config.json ไม่มี key ที่ต้องใช้
     ) as exc:
-        # M3: จับเฉพาะ error ที่คาดไว้แล้ว fallback — bug อื่น (RuntimeError ฯลฯ) ต้องโผล่
-        warnings.warn(f"spec lookup failed for {model_id!r}: {exc}", stacklevel=2)
+        # M3: จับเฉพาะ error ของ library — KeyError/TypeError ที่มาจาก _spec_from_config
+        # (ข้อมูล config พัง/บั๊กจริง) ต้อง propagate ไม่ใช่ถูกกลืนเป็น warning + ค่าผิด (B5)
+        warnings.warn(f"spec lookup failed for {model_id!r}: {detail}: {exc}", stacklevel=2)
+        lookup_reason = f"{detail}: {exc}"
 
     # P ที่ใช้ไม่ได้ (ไม่กรอก / 0 / ลบ / NaN / inf) = ยังไม่ทราบที่เชื่อถือได้ → ห้ามเดา
     if user_params_b is None or not math.isfinite(user_params_b) or user_params_b <= 0:
-        raise ModelSpecUnavailable(model_id) from None
+        raise ModelSpecUnavailable(f"{model_id}: {lookup_reason}") from None
     return ModelSpec(
         int(user_params_b * 1e9),
         ESTIMATOR_FALLBACK_HIDDEN_SIZE,
@@ -214,10 +219,10 @@ def estimate(
     # (2) resolve P ไม่ได้ + ไม่กรอก → blocked (ห้ามเดา)
     try:
         spec = resolve_model_spec(model_id, user_params_b)
-    except ModelSpecUnavailable:
+    except ModelSpecUnavailable as exc:
         return EstimateResult(
             "blocked",
-            "Unknown parameter count — enter Parameters (B) in the UI (guessing is not allowed)",
+            f"Unknown parameter count: {exc} — enter Parameters (B) in the UI (guessing is not allowed)",
             0.0, 0.0, 0.0, 0.0, 0.0, free, "",
         )
 

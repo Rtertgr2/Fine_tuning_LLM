@@ -205,8 +205,8 @@ def test_run_eval_json_reports_skipped_long_middle(monkeypatch, tmp_path):
         def from_pretrained(model_id):
             return FakeTok()
 
-    monkeypatch.setattr(ev, "AutoTokenizer", _FakeAutoTok)
-    monkeypatch.setattr(ev, "ensure_fim_tokens", lambda tok, vals: {})
+    monkeypatch.setattr("core.trainer_worker.AutoTokenizer", _FakeAutoTok)
+    monkeypatch.setattr("core.trainer_worker.ensure_fim_tokens", lambda tok, vals: {})
     class _FakeModel:
         def to(self, *_args):
             return self
@@ -215,8 +215,7 @@ def test_run_eval_json_reports_skipped_long_middle(monkeypatch, tmp_path):
             return self
 
     monkeypatch.setattr(
-        ev,
-        "AutoModelForCausalLM",
+        "core.trainer_worker.AutoModelForCausalLM",
         SimpleNamespace(from_pretrained=lambda *a, **k: _FakeModel()),
     )
     monkeypatch.setattr(
@@ -336,8 +335,8 @@ def test_run_eval_no_cases_raises(monkeypatch, tmp_path):
         def from_pretrained(model_id):
             return FakeTok()
 
-    monkeypatch.setattr(ev, "AutoTokenizer", _FakeAutoTok)
-    monkeypatch.setattr(ev, "ensure_fim_tokens", lambda tok, vals: {})
+    monkeypatch.setattr("core.trainer_worker.AutoTokenizer", _FakeAutoTok)
+    monkeypatch.setattr("core.trainer_worker.ensure_fim_tokens", lambda tok, vals: {})
     monkeypatch.setattr(ev, "iter_codes", lambda *a, **k: [])
     with pytest.raises(ValueError, match="no eval cases"):
         ev.run_eval(_valid_config(), mode="base", eval_dir=tmp_path)

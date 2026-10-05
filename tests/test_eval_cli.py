@@ -33,6 +33,22 @@ def test_min_delta_constants_pinned():
     assert eval_module.MIN_DELTA_F1 == 0.01
 
 
+def test_import_eval_and_evaluator_do_not_load_torch():
+    """D10: --compare เป็น pure stdlib — `import eval` ห้ามดึง torch+transformers+peft+trl ทั้งชุด"""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[1]
+    proc = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; import core.evaluator, eval; "
+         "assert 'torch' not in sys.modules, 'torch was pulled in'"],
+        capture_output=True, text=True, cwd=repo,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
 def test_compare_fail_on_tie(tmp_path, capsys):
     # M9: เดิม tie → PASS (+0.0 ผ่าน gate) — ตอนนี้ต้องดีขึ้นเกิน min-delta ถึงจะ PASS
     r = _result("base", em=5.0, f1=0.2)

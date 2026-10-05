@@ -308,7 +308,6 @@ def iter_codes(
     *,
     limit: int,
     split: str = "train",
-    cache_dir: str = "data_cache",
 ) -> list[str]:
     """อ่าน `limit` ตัวอย่างแรก — โฟลเดอร์ `.parquet` ท้องถิ่นอ่านตรง ๆ, Hub ใช้ streaming
 
@@ -318,5 +317,18 @@ def iter_codes(
     local = _resolve_local_dataset_dir(dataset_id)
     if local is not None:
         return _read_local_parquet(local, column, limit)
-    ds = load_dataset(dataset_id, split=split, streaming=True, cache_dir=cache_dir)
-    return [row[column] for row in islice(ds, limit)]
+    ds = load_dataset(dataset_id, split=split, streaming=True)
+    rows = islice(iter(ds), limit)
+    first = next(rows, None)
+    if first is None:
+        return []
+    if column not in first:
+        # B3: ระบุ column ที่ใช้ได้จริงทั้งหมด (test pin "alpha, beta" = union ข้าม rows)
+        keys: set[str] = set(first)
+        for row in rows:
+            keys.update(row)
+        raise ValueError(
+            f"Column '{column}' not found in dataset '{dataset_id}' "
+            f"(available: {', '.join(sorted(keys))}). Fix the Dataset column."
+        )
+    return [first[column], *(row[column] for row in rows)]

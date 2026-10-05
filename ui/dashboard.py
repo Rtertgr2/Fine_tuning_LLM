@@ -16,6 +16,7 @@ from configs.safe_defaults import (
     DEFAULT_DATASET_COLUMN,
     DEFAULT_DATASET_ID,
     DEFAULT_MODEL_ID,
+    DEFAULT_OUTPUT_DIR,
     LORA_RANK_DEFAULT,
     MAX_SEQ_LENGTH_CAP,
     MAX_SEQ_LENGTH_DEFAULT,
@@ -29,7 +30,6 @@ from core.trainer_worker import merge_export, save_adapter_only
 from ui.components import build_metric_plot, verdict_style
 from ui.controller import run_predict
 
-_DEFAULT_OUTPUT_DIR = "data_cache/finetune_run"  # spec §4 table default (ไม่อยู่ใน safe_defaults — มีที่เดียว)
 _STATUS_COLORS = {
     "idle": "#6b7280",
     "starting": "#ca8a04",
@@ -314,7 +314,7 @@ def build_dashboard(controller) -> gr.Blocks:
                     code_limit_in = gr.Number(
                         value=TRAIN_CODE_LIMIT, precision=0, label="Code limit"
                     )
-                    output_in = gr.Textbox(value=_DEFAULT_OUTPUT_DIR, label="Output dir")
+                    output_in = gr.Textbox(value=DEFAULT_OUTPUT_DIR, label="Output dir")
                     # M8: resume จาก checkpoint ล่าสุดใน output dir (abort แล้วไม่ต้องเริ่มใหม่จากศูนย์)
                     resume_in = gr.Checkbox(
                         value=False, label="Resume from latest checkpoint"

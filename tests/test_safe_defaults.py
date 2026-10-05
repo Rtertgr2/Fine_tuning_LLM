@@ -52,3 +52,8 @@ def test_ipc_and_training_blocks():
     # M4: near-dup leakage guard — threshold + posting cap (ดู core/dataset_builder.py)
     assert sd.NEAR_DUP_JACCARD == 0.8
     assert sd.NEAR_DUP_MAX_POSTING == 50
+
+
+def test_default_output_dir_pinned():
+    """D6: output dir default ต้องเป็นที่เดียวใน safe_defaults (เดิมซ้ำใน eval.py + dashboard)"""
+    assert sd.DEFAULT_OUTPUT_DIR == "data_cache/finetune_run"

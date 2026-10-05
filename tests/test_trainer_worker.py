@@ -210,6 +210,19 @@ def test_nan_trip_sends_error_and_stops():
     assert all(m.get("state") != "finished" for m in q.messages)
 
 
+def test_on_log_returns_control_explicitly():
+    """A4: on_log ทุกทางออกคืน control ชัดเจน — เดิม mutation อย่างเดียว อ่านไม่ออกว่าจบ method (รายงาน A4)"""
+    q, cb, state, control = _cb_with_states()          # fixture เดิมจาก test_nan_trip :196
+    ret = cb.on_log(None, state, control, {"loss": 0.5, "step": 1})
+    assert ret is control                              # path ปกติ
+    for _ in range(3):
+        ret = cb.on_log(None, state, control, {"loss": float("nan"), "step": 10})
+    assert ret is control                              # trip path
+    assert control.should_training_stop is True
+    ret = cb.on_log(None, state, control, {"loss": 0.4, "step": 11})
+    assert ret is control                              # path หลัง trip
+
+
 def test_non_metric_logs_forwarded():
     q, cb, state, control = _cb_with_states()
     cb.on_log(None, state, control, {"train_runtime": 100.0})
@@ -261,6 +274,7 @@ def test_args_enable_validation_loop():
 def test_args_disable_eval_when_no_heldout():
     args = wa.build_training_args("out", has_eval_dataset=False)
     assert args.eval_strategy == "no"  # ไม่มี heldout → ปิด val loop (ห้าม crash)
+    assert args.eval_steps == 0  # A6: strategy=no ห้ามตั้ง eval_steps ที่ไม่ถูกใช้ (RED เดิม = 50)
 
 
 def test_on_log_eval_loss_sends_val_metric():

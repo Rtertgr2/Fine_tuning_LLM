@@ -332,12 +332,49 @@ def test_resolve_model_spec_unexpected_error_propagates(monkeypatch, tmp_path):
 
 
 def test_resolve_model_spec_known_errors_warn_and_fall_back(monkeypatch, tmp_path):
-    # OSError/ValueError/KeyError/JSONDecodeError = ที่คาดไว้ (offline/JSON เสีย/config ไม่ครบ)
+    # OSError/ValueError/JSONDecodeError = ที่คาดไว้ (offline/JSON เสีย) — KeyError/TypeError
+    # จาก _spec_from_config propagate แล้ว (B5) → ห้ามเขียนชื่อพวกนี้ใน comment นี้
     # → warning + fallback คงพฤติกรรมเดิม — hub 1.x: HfHubHTTPError/LocalEntryNotFound ⊂ OSError
     _patch_fetch(monkeypatch, tmp_path, error=OSError("offline"))
     with pytest.warns(UserWarning, match="acme/offline-model"):
         spec = est.resolve_model_spec("acme/offline-model", 1.5)
     assert spec.source == "user_fallback"
+
+
+def test_resolve_model_spec_missing_key_propagates(tmp_path, monkeypatch):
+    """B5: config.json ไม่มี key (KeyError จาก _spec_from_config) ห้ามถูกกลืนเป็น warning+fallback"""
+    monkeypatch.setattr(est, "MODELS_DIR", str(tmp_path))   # convention: str (:207,:232)
+    d = tmp_path / "m1"
+    d.mkdir()
+    (d / "config.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(KeyError):
+        est.resolve_model_spec("m1", None)
+
+
+def test_resolve_model_spec_none_value_propagates(tmp_path, monkeypatch):
+    """B5: int(None) = TypeError จาก _spec_from_config — ห้ามกลืน"""
+    monkeypatch.setattr(est, "MODELS_DIR", str(tmp_path))
+    d = tmp_path / "m2"
+    d.mkdir()
+    (d / "config.json").write_text(json.dumps({"hidden_size": None}), encoding="utf-8")
+    with pytest.raises(TypeError):
+        est.resolve_model_spec("m2", None)
+
+
+def test_resolve_model_spec_missing_config_json_names_the_file(tmp_path, monkeypatch):
+    """B6: local dir ไม่มี config.json → exception ต้องบอกชื่อไฟล์ (เดิม = bare model_id)"""
+    monkeypatch.setattr(est, "MODELS_DIR", str(tmp_path))
+    (tmp_path / "m3").mkdir()
+    with pytest.raises(est.ModelSpecUnavailable, match="config.json"):
+        est.resolve_model_spec("m3", None)
+
+
+def test_estimate_blocked_reason_names_missing_config(tmp_path, monkeypatch):
+    """B6: UI เห็นผ่าน estimate().reason — ต้องบอกไฟล์ที่หาย"""
+    monkeypatch.setattr(est, "MODELS_DIR", str(tmp_path))
+    (tmp_path / "m4").mkdir()
+    result = est.estimate(_hw_ready(), model_id="m4", user_params_b=None)
+    assert "config.json" in result.reason
 
 
 # ---------------------------------------------------------------------------

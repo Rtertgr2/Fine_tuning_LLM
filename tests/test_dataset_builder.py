@@ -273,23 +273,31 @@ def test_filter_train_codes_drops_reindented_twin_of_heldout():
 def test_iter_codes_limits_and_column(monkeypatch):
     calls: dict = {}
 
-    def fake_load_dataset(dataset_id, *, split, streaming, cache_dir):
+    def fake_load_dataset(dataset_id, *, split, streaming):  # ลบ cache_dir (B2)
         calls["dataset_id"] = dataset_id
         calls["split"] = split
         calls["streaming"] = streaming
-        calls["cache_dir"] = cache_dir
         return ({"content": f"code_{i}", "other": i} for i in range(100))
 
     monkeypatch.setattr(db, "load_dataset", fake_load_dataset)
     got = db.iter_codes("fake/ds", "content", limit=5)
     assert got == [f"code_{i}" for i in range(5)]  # 5 ตัวแรกตามลำดับ
-    # kwargs ที่ส่งไปต้องตรง: streaming + split + cache_dir
+    # kwargs ที่ส่งไปต้องตรง: streaming + split (B2: ไม่ส่ง cache_dir อีกต่อไป)
     assert calls == {
         "dataset_id": "fake/ds",
         "split": "train",
         "streaming": True,
-        "cache_dir": "data_cache",
     }
+
+
+def test_iter_codes_hub_missing_column_gives_english_error(monkeypatch):
+    """B3: streaming column ผิด → ValueError อังกฤษพร้อมรายชื่อ column ใช้ได้ (ตรง convention ฝั่ง local :285-289)"""
+    monkeypatch.setattr(db, "load_dataset", lambda *a, **k: iter([{"alpha": "x = 1"}, {"beta": "y = 2"}]))
+    with pytest.raises(ValueError) as excinfo:
+        db.iter_codes("fake/ds", "content", limit=2)
+    msg = str(excinfo.value)
+    assert "Column 'content' not found in dataset 'fake/ds'" in msg
+    assert "available: alpha, beta" in msg
 
 
 # ---------------------------------------------------------------------------

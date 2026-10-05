@@ -95,3 +95,29 @@ def test_insufficient_disk(monkeypatch):
     _patch(monkeypatch, has_xpu=True, ram_avail=20 * GB, disk_free=19.9 * GB)
     result = hw.inspect()
     assert result["status"] == "insufficient_disk"
+
+
+def test_existing_ancestor_walks_up(tmp_path):
+    """D6: output_dir อาจยังไม่ถูกสร้าง — disk check ต้องใช้ ancestor ที่มีอยู่จริง"""
+    deep = tmp_path / "a" / "b" / "c"
+    assert hw.existing_ancestor(deep) == tmp_path
+    assert hw.existing_ancestor(tmp_path) == tmp_path
+
+
+def test_inspect_uses_current_device_not_hardcoded_zero(monkeypatch):
+    """D5: device index ต้องมาจาก xpu.current_device() — hardcode 0 ผิดบน multi-XPU"""
+    _patch(monkeypatch)                      # fixture เดิม :18 (is_available/psutil พร้อม)
+    calls: dict[str, list[int]] = {"mem": [], "name": []}
+    monkeypatch.setattr(hw.torch.xpu, "current_device", lambda: 3)
+    monkeypatch.setattr(
+        hw.torch.xpu,
+        "mem_get_info",
+        lambda i: calls["mem"].append(i) or (11 * GB, 12 * GB),
+    )
+    monkeypatch.setattr(
+        hw.torch.xpu,
+        "get_device_name",
+        lambda i: calls["name"].append(i) or "Intel(R) Arc(TM) B580 Graphics",
+    )
+    hw.inspect()
+    assert calls["mem"] == [3] and calls["name"] == [3]   # RED เดิม = [0], [0]

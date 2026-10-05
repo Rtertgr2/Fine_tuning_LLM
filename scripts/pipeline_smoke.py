@@ -37,7 +37,7 @@ VRAM_TOLERANCE_GB = 0.5
 
 
 def _free_vram_gb() -> float:
-    free_bytes, _total = torch.xpu.mem_get_info(0)
+    free_bytes, _total = torch.xpu.mem_get_info(torch.xpu.current_device())  # D5
     return free_bytes / 1024**3
 
 

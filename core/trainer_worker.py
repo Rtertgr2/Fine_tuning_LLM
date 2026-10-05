@@ -97,8 +97,8 @@ def build_training_args(
     `warmup_ratio` ออกแล้ว — คงสัดส่วน 3% ไว้แบบ dynamic (500 steps → 15)
     `max_seq_length` ต้องมาจาก config เพราะ packing ตัด/รวม token ที่ `max_length`
     (hardcode = UI ตั้งค่าใน Phase 4 ถูกเพิกเฉยเงียบ ๆ)
-    `has_eval_dataset=False` (ไม่มี heldout) → eval_strategy="no" — ห้ามตั้ง steps
-    แล้วไม่ส่ง eval_dataset (transformers raise)
+    `has_eval_dataset=False` (ไม่มี heldout) → eval_strategy="no" + eval_steps=0 —
+    ห้ามตั้ง steps/ค่าที่ไม่ถูกใช้ แล้วไม่ส่ง eval_dataset (transformers raise)
     """
     return SFTConfig(
         output_dir=output_dir,
@@ -106,7 +106,7 @@ def build_training_args(
         save_steps=save_steps,
         save_strategy="steps",
         eval_strategy="steps" if has_eval_dataset else "no",
-        eval_steps=max(VAL_EVAL_MIN_STEPS, max_steps // 10),
+        eval_steps=max(VAL_EVAL_MIN_STEPS, max_steps // 10) if has_eval_dataset else 0,
         per_device_train_batch_size=DEFAULT_BATCH_SIZE,
         # P1 A2: eval batch = train — default 8 + packing แถวยาวเต็ม → OOM ตอน eval
         per_device_eval_batch_size=DEFAULT_BATCH_SIZE,
@@ -242,10 +242,10 @@ class StreamToQueueCallback(TrainerCallback):
                     val_loss=logs["eval_loss"],
                 )
             )
-            return
+            return control
         if "loss" not in logs:
             self.queue.put(log_msg("INFO", str(logs)))
-            return
+            return control
         loss = logs["loss"]
         if "learning_rate" in logs:
             self.last_lr = logs["learning_rate"]
@@ -271,6 +271,7 @@ class StreamToQueueCallback(TrainerCallback):
             self.queue.put(status_msg("aborted"))
             self.aborted = True
             control.should_training_stop = True
+        return control
 
     def on_train_begin(self, args, state, control, **kwargs):
         if not self.aborted:

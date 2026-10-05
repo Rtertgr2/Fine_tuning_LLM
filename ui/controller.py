@@ -91,10 +91,8 @@ class TrainingController:
 
         verdict ที่ไม่ใช่ safe/warning (blocked/no_xpu/insufficient_*) → dashboard ปิดปุ่ม Start
         """
-        # output_dir อาจยังไม่ถูกสร้าง (fresh start) — ใช้ ancestor ที่มีอยู่จริงแทน (disk อยู่ volume เดียวกัน)
-        out_dir = Path(config.get("output_dir", "."))
-        while not out_dir.exists() and out_dir != out_dir.parent:
-            out_dir = out_dir.parent
+        # output_dir อาจยังไม่ถูกสร้าง (fresh start) — ใช้ ancestor ที่มีอยู่จริงแทน (disk อยู่ volume เดียวกัน) (D6)
+        out_dir = hardware.existing_ancestor(config.get("output_dir", "."))
         hw = hardware.inspect(output_dir=str(out_dir))
         return estimate(
             hw,

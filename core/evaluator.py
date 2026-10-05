@@ -13,8 +13,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-import torch
-
 from configs.safe_defaults import (
     MAX_SEQ_LENGTH_DEFAULT,
     MIN_SAMPLE_LINES,
@@ -26,14 +24,6 @@ from core.dataset_builder import (
     iter_codes,
     split_fim,
     truncate_to_tokens,
-)
-from core.trainer_worker import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    build_fim_prompt,
-    ensure_fim_tokens,
-    latest_checkpoint,
-    validate_config,
 )
 
 EVAL_DIR = Path("data_cache/eval")
@@ -135,6 +125,11 @@ def evaluate_cases(
     progress: Callable[[int, int], None] | None = None,
 ) -> dict:
     """generate middle ต่อ case แบบ greedy → คำนวณ Exact Match + Token F1"""
+    # lazy import: --compare ห้ามดึง torch/transformers (D10)
+    import torch
+
+    from core.trainer_worker import build_fim_prompt
+
     per_case: list[dict] = []
     total = len(cases)
     # P0 D1: marker (id ของ fim_tokens) ไม่ใช่ special token → decode ปล่อยออกมา → กรองเอง
@@ -185,6 +180,17 @@ def run_eval(
     fail-fast: validate → checkpoint (finetuned) → tokenizer → cases → model
     โหลดโมเดลทีละ 1 ตัวเท่านั้น (caller ต้องไม่รัน 2 mode ขนาน — §5 VRAM)
     """
+    # lazy import: --compare ห้ามดึง torch/transformers (D10)
+    import torch
+
+    from core.trainer_worker import (
+        AutoModelForCausalLM,
+        AutoTokenizer,
+        ensure_fim_tokens,
+        latest_checkpoint,
+        validate_config,
+    )
+
     if mode not in ("base", "finetuned"):
         raise ValueError(f'mode must be "base" or "finetuned", got {mode!r}')
     validate_config(config)

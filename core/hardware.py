@@ -6,12 +6,22 @@ status == "ready" เชื่อถือได้ 100% — เช็คตา�
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import psutil
 import torch
 
 from configs.safe_defaults import DISK_MIN_GB, RAM_MIN_GB
 
 GB = 1024**3
+
+
+def existing_ancestor(path: str | Path) -> Path:
+    """เดินขึ้นจนเจอ path ที่มีอยู่จริง (output_dir อาจยังไม่ถูกสร้าง — disk อยู่ volume เดียวกัน) (D6)"""
+    p = Path(path)
+    while not p.exists() and p != p.parent:
+        p = p.parent
+    return p
 
 
 def _xpu_available() -> bool:
@@ -42,10 +52,11 @@ def inspect(output_dir: str = ".") -> dict:
         }
 
     # (2) VRAM จาก mem_get_info — คืน (free, total) เป็น bytes
-    free_b, total_b = torch.xpu.mem_get_info(0)
+    device = torch.xpu.current_device()  # D5: index จริง ไม่ใช่ hardcode 0 (multi-XPU)
+    free_b, total_b = torch.xpu.mem_get_info(device)
     result = {
         "status": "ready",
-        "device_name": torch.xpu.get_device_name(0),
+        "device_name": torch.xpu.get_device_name(device),
         "total_vram_gb": total_b / GB,
         "free_vram_gb": free_b / GB,
         "ram_available_gb": ram_available_gb,

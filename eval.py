@@ -19,6 +19,7 @@ from configs.safe_defaults import (
     DEFAULT_DATASET_COLUMN,
     DEFAULT_DATASET_ID,
     DEFAULT_MODEL_ID,
+    DEFAULT_OUTPUT_DIR as _DEFAULT_OUTPUT_DIR,
     LORA_RANK_DEFAULT,
     MAX_SEQ_LENGTH_DEFAULT,
     MAX_STEPS,
@@ -26,7 +27,6 @@ from configs.safe_defaults import (
 )
 from core import evaluator as ev
 
-_DEFAULT_OUTPUT_DIR = "data_cache/finetune_run"  # spec §4 table default (ตรงกับ UI)
 # M9: gate ต้องมี min-delta — +0.0 (tie) ห้าม PASS: ต้องดีขึ้นอย่างมีนัยทุก metric
 # EM: n=100 → 1 case = 1.0pt — 0.1pt = ต่ำกว่า 1 case ก็ยังยอมรับได้ แต่ 0.0 ไม่ผ่าน
 # F1: ตรง display precision ของรายงาน (ทศนิยม 2 ตำแหน่ง)

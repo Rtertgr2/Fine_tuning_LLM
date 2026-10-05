@@ -46,6 +46,7 @@ ESTIMATOR_FALLBACK_NUM_LAYERS: int = 40
 # P1 B1: hub fetch pin — เปลี่ยน HF_HUB_REVISION เป็น commit sha เมื่อต้องการ reproducibility เข้ม
 HF_HUB_REVISION: str = "main"
 HF_HUB_CACHE_DIR: str = "data_cache/hf_hub"  # cache ใต้ data_cache (ไม่ใช่ ~/.cache) — resolve จาก REPO_ROOT
+DEFAULT_OUTPUT_DIR: str = "data_cache/finetune_run"  # spec §4 table default — เดิมซ้ำใน eval.py:29 + ui/dashboard.py:32 (D6)
 
 # --- Subprocess / IPC ---
 ABORT_SIGTERM_TIMEOUT_S: float = 10.0
