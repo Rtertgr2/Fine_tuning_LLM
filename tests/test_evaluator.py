@@ -33,6 +33,10 @@ class FakeTok:
         inv = {v: k for k, v in self._vocab.items()}
         return " ".join(inv.get(int(i), "<unk>") for i in ids)
 
+    def convert_tokens_to_ids(self, tok: str) -> int:
+        # P0 D1: evaluate_cases ใช้หา id ของ FIM marker เพื่อกรองออกจาก continuation
+        return self.encode(tok)[0]
+
     def __call__(self, prompt: str, *, return_tensors: str = "pt") -> dict:
         self.captured_prompts.append(prompt)
         ids = torch.tensor([self.encode(prompt)])
@@ -228,6 +232,17 @@ def test_evaluate_cases_prompt_equals_build_fim_prompt():
     )
     assert tok.captured_prompts == [build_fim_prompt("def f():", "pass", fim_tokens=FIM)]
     assert model.calls[0]["do_sample"] is False  # greedy — ผล eval ต้องซ้ำได้
+    assert result["per_case"][0]["exact"] is True
+
+
+def test_evaluate_cases_strips_fim_markers_from_pred():
+    """P0 D1: marker id ไม่ใช่ special → decode เดิมปล่อยออกมา → EM/F1 เพี้ยนทุกชุด"""
+    tok = FakeTok()
+    tok._vocab["<|fim_middle|>"] = 151660  # ตรง id จริงของ registry
+    case = ev.EvalCase("def f():", "pass", "return 1")
+    model = FakeModel("return 1 <|fim_prefix|>", tok)  # model echo marker ออกมา
+    result = ev.evaluate_cases(model, tok, [case], fim_tokens=FIM, device="cpu")
+    assert result["per_case"][0]["pred"] == "return 1"
     assert result["per_case"][0]["exact"] is True
 
 

@@ -342,6 +342,15 @@ def test_dashboard_wires_refresh_choices_on_tab1():
     assert "on_refresh_choices" in names
 
 
+def test_dashboard_wires_start_in_model_load_group():
+    """P0 C1: Start ต้อง serialize กับ eval/predict ที่ค้าง — ไม่งั้น 2 process โหลดโมเดล = OOM"""
+    demo = build_dashboard(FakeController())
+    by_api = {d.api_name: d for d in demo.fns.values() if getattr(d, "api_name", None)}
+    # anchor: predict/merge/eval อยู่ใน group เดิม (M2) — ยืนยันว่าอ่านถูกแหล่ง
+    assert by_api["on_predict"].concurrency_id == "model_load"
+    assert by_api["on_start"].concurrency_id == "model_load"
+
+
 def test_collect_config_resolves_local_model_name(monkeypatch, tmp_path):
     """ชื่อโมเดลจาก dropdown (ใต้ models/) → config.model_id ต้องเป็น path ที่โหลดได้จริง
 

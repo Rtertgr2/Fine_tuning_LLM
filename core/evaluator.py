@@ -122,6 +122,8 @@ def evaluate_cases(
     """generate middle ต่อ case แบบ greedy → คำนวณ Exact Match + Token F1"""
     per_case: list[dict] = []
     total = len(cases)
+    # P0 D1: marker (id ของ fim_tokens) ไม่ใช่ special token → decode ปล่อยออกมา → กรองเอง
+    fim_ids = {tokenizer.convert_tokens_to_ids(t) for t in fim_tokens.values()}
     for i, case in enumerate(cases):
         prompt = build_fim_prompt(case.prefix, case.suffix, fim_tokens=fim_tokens)
         inputs = tokenizer(prompt, return_tensors="pt")
@@ -131,7 +133,8 @@ def evaluate_cases(
                 **inputs, max_new_tokens=EVAL_MAX_NEW_TOKENS, do_sample=False
             )
         continuation = output_ids[0][inputs["input_ids"].shape[1] :]
-        pred = tokenizer.decode(continuation, skip_special_tokens=True)
+        kept = [int(t) for t in continuation.tolist() if int(t) not in fim_ids]
+        pred = tokenizer.decode(kept, skip_special_tokens=True)
         per_case.append(
             {
                 "i": i,

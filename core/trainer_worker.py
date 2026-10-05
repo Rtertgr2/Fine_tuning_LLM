@@ -117,6 +117,8 @@ def build_training_args(
         optim="adamw_torch",
         bf16=_xpu_bf16_supported(),
         logging_steps=1,
+        # P0 A1: transformers default กรอง non-finite loss ก่อนถึง on_log → NanGuard ไม่เคยทำงาน
+        logging_nan_inf_filter=False,
         report_to=[],
         max_length=max_seq_length,
         dataset_text_field="text",

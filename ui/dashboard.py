@@ -371,7 +371,11 @@ def build_dashboard(controller) -> gr.Blocks:
             h["on_check"], inputs=cfg_inputs,
             outputs=[gauge_md, verdict_state, start_btn],
         )
-        start_btn.click(h["on_start"], inputs=cfg_inputs, outputs=[start_error_md])
+        # P0 C1: Start อยู่ใน group เดียวกับ predict/merge/eval — กัน 2 process โหลดโมเดลพร้อมกัน (OOM)
+        start_btn.click(
+            h["on_start"], inputs=cfg_inputs, outputs=[start_error_md],
+            concurrency_id="model_load",
+        )
         abort_btn.click(h["on_abort"], inputs=[], outputs=[start_error_md])
         timer.tick(
             h["on_tick"], inputs=[verdict_state],

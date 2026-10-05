@@ -29,6 +29,7 @@ def test_args_pin_hyperparams():
     assert args.save_strategy == "steps"
     assert args.logging_steps == 1
     assert args.report_to == []
+    assert args.logging_nan_inf_filter is False  # P0 A1: filter ปิด → NanGuard เห็น loss จริง
 
 
 def test_args_overrides_for_smoke():
