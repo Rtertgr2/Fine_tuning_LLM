@@ -26,6 +26,9 @@ DEFAULT_DATASET_COLUMN: str = "content"
 DATASETS_DIR: str = "datasets"
 MODELS_DIR: str = "models"
 HELDOUT_RATIO: float = 0.10
+# M4: near-dup leakage guard (core/dataset_builder.py::find_near_dup_leakage)
+NEAR_DUP_JACCARD: float = 0.8  # train line-shingle ที่ซ้อน heldout ≥ 0.8 = ทิ้ง
+NEAR_DUP_MAX_POSTING: int = 50  # ตัด shingle ที่พบใน heldout เกินกว่านี้ (บรรทัดสามัญ = สัญญาณต่ำ)
 
 # --- Estimator (core/estimator.py) ---
 # ค่า hardcode ของโมเดล default (plan.md §4.2) — วัดจริงจาก Phase 1:

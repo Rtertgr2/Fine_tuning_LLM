@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import random
-from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,19 +55,35 @@ def exact_match(pred: str, gt: str) -> bool:
 
 
 def token_f1(pred: str, gt: str, tokenizer) -> float:
-    """F1 บน multiset ของ token ids — ทั้งคู่ว่าง = 1.0, ฝั่งเดียวว่าง = 0.0"""
-    pred_ids = Counter(tokenizer.encode(pred, add_special_tokens=False))
-    gt_ids = Counter(tokenizer.encode(gt, add_special_tokens=False))
+    """F1 บน longest common subsequence ของ token ids (M10: order mattered จริง ๆ)
+
+    ทั้งคู่ว่าง = 1.0, ฝั่งเดียวว่าง = 0.0, overlap 0 = 0.0 (คง contract เดิม)
+    """
+    pred_ids = tokenizer.encode(pred, add_special_tokens=False)
+    gt_ids = tokenizer.encode(gt, add_special_tokens=False)
     if not pred_ids and not gt_ids:
         return 1.0
     if not pred_ids or not gt_ids:
         return 0.0
-    overlap = sum((pred_ids & gt_ids).values())
-    if overlap == 0:
+    lcs = _lcs_length(pred_ids, gt_ids)
+    if lcs == 0:
         return 0.0
-    precision = overlap / sum(pred_ids.values())
-    recall = overlap / sum(gt_ids.values())
+    precision = lcs / len(pred_ids)
+    recall = lcs / len(gt_ids)
     return 2 * precision * recall / (precision + recall)
+
+
+def _lcs_length(a: list[int], b: list[int]) -> int:
+    """LCS length (standard DP) — ทั้งสองฝั่ง bounded ที่ EVAL_MAX_NEW_TOKENS (256) → ≤ 65k cells"""
+    if len(a) > len(b):
+        a, b = b, a  # inner loop สั้นฝั่ง — LCS สมมาตร
+    prev = [0] * (len(a) + 1)
+    for bj in b:
+        cur = [0]
+        for i, ai in enumerate(a, 1):
+            cur.append(prev[i - 1] + 1 if ai == bj else max(prev[i], cur[-1]))
+        prev = cur
+    return prev[-1]
 
 
 def build_eval_cases(

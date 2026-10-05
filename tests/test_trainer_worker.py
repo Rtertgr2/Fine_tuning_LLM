@@ -450,37 +450,43 @@ def test_peak_xpu_memory_uses_torch(monkeypatch):
     assert wa.peak_xpu_memory_gb("allocated") == 1.0
 
 
-def test_run_training_filters_heldout_from_iter_codes(monkeypatch):
-    """spec Phase 5: `run_training` ต้องกรอง heldout ก่อนสร้างชุดเทรน (mock iter_codes)"""
-    from core.dataset_builder import is_heldout
+def _stub_training_env(
+    monkeypatch,
+    *,
+    codes: list[str],
+    train_calls: list | None = None,
+    recorded_codes: list | None = None,
+    lora_targets: list | None = None,
+) -> None:
+    """ตัด dependency หนักของ run_training ทั้งหมด (tokenizer/model/dataset/trainer)
 
-    heldout_code = next(c for c in (f"heldout_{i}" for i in range(5000)) if is_heldout(c))
-    train_code = next(c for c in (f"train_{i}" for i in range(5000)) if not is_heldout(c))
-    assert heldout_code != train_code
-
-    recorded: list[list[str]] = []
+    - train_calls: บันทึกค่า resume_from_checkpoint ทุกครั้งที่ trainer.train ถูกเรียก
+    - recorded_codes: เก็บ codes ที่ถูกส่งเข้า build_samples (หลัง filter)
+    - lora_targets: เก็บ target_modules ที่ LoraConfig ได้รับ
+    """
 
     class _Tok:
         eos_token = "</s>"
 
         def encode(self, text, add_special_tokens=False):
-            # double ต้องพอให้ build_eval_texts (ของจริง) คำนวณ budget ได้ —
-            # code เดียวบรรทัดโดน build_samples skip (min_lines) อยู่ดี
+            # double ต้องพอให้ build_eval_texts (ของจริง) คำนวณ budget ได้
             return [0] * max(1, len(text))
 
     class _Trainer:
         def __init__(self, **_kw):
             pass
 
-        def train(self):
-            pass
+        def train(self, resume_from_checkpoint=None):
+            if train_calls is not None:
+                train_calls.append(resume_from_checkpoint)
 
     monkeypatch.setattr(wa.AutoTokenizer, "from_pretrained", lambda mid: _Tok())
     monkeypatch.setattr(wa, "ensure_fim_tokens", lambda tok, toks: None)
-    monkeypatch.setattr(wa, "iter_codes", lambda *a, **k: [heldout_code, train_code])
+    monkeypatch.setattr(wa, "iter_codes", lambda *a, **k: list(codes))
 
-    def _fake_build_samples(codes, **_kw):
-        recorded.append(list(codes))
+    def _fake_build_samples(cs, **_kw):
+        if recorded_codes is not None:
+            recorded_codes.append(list(cs))
         return ["dummy text"]
 
     monkeypatch.setattr(wa, "build_samples", _fake_build_samples)
@@ -491,15 +497,33 @@ def test_run_training_filters_heldout_from_iter_codes(monkeypatch):
     monkeypatch.setattr(
         wa.AutoModelForCausalLM, "from_pretrained", lambda *a, **k: fake_model
     )
-    lora_targets: list = []
-    _real_lora_config = wa.LoraConfig
+    if lora_targets is not None:
+        _real_lora_config = wa.LoraConfig
 
-    def _recording_lora_config(**kw):
-        lora_targets.append(kw.get("target_modules"))
-        return _real_lora_config(**kw)
+        def _recording_lora_config(**kw):
+            lora_targets.append(kw.get("target_modules"))
+            return _real_lora_config(**kw)
 
-    monkeypatch.setattr(wa, "LoraConfig", _recording_lora_config)
+        monkeypatch.setattr(wa, "LoraConfig", _recording_lora_config)
     monkeypatch.setattr(wa, "AtomicSaveTrainer", _Trainer)
+
+
+def test_run_training_filters_heldout_from_iter_codes(monkeypatch):
+    """spec Phase 5: `run_training` ต้องกรอง heldout ก่อนสร้างชุดเทรน (mock iter_codes)"""
+    from core.dataset_builder import is_heldout
+
+    heldout_code = next(c for c in (f"heldout_{i}" for i in range(5000)) if is_heldout(c))
+    train_code = next(c for c in (f"train_{i}" for i in range(5000)) if not is_heldout(c))
+    assert heldout_code != train_code
+
+    recorded: list[list[str]] = []
+    lora_targets: list = []
+    _stub_training_env(
+        monkeypatch,
+        codes=[heldout_code, train_code],
+        recorded_codes=recorded,
+        lora_targets=lora_targets,
+    )
 
     cfg = {
         "model_id": "Qwen/Qwen2.5-Coder-0.5B",
@@ -521,6 +545,63 @@ def test_run_training_filters_heldout_from_iter_codes(monkeypatch):
     assert all(m.get("type") != "error" for m in q.messages)
     # wiring: LoraConfig ได้เฉพาะ target ที่มีในโมเดลจริง (q_proj เท่านั้น ไม่ใช่ทั้ง 7)
     assert lora_targets == [["q_proj"]]
+
+
+def test_resume_checkpoint_returns_latest_or_none(tmp_path):
+    assert wa.resume_checkpoint(tmp_path) is None  # ยังไม่มี checkpoint
+    (tmp_path / "checkpoint-5").mkdir()
+    assert wa.resume_checkpoint(tmp_path) == str(tmp_path / "checkpoint-5")
+
+
+def _resume_cfg(output_dir: str, resume: bool = True) -> dict:
+    return {
+        "model_id": "Qwen/Qwen2.5-Coder-0.5B",
+        "dataset_id": "smangrul/hf-stack-v1",
+        "dataset_column": "content",
+        "fim_registry_key": "qwen",
+        "output_dir": output_dir,
+        "max_seq_length": 1024,
+        "max_steps": 1,
+        "code_limit": 100,
+        "lora_rank": 8,
+        "resume": resume,
+    }
+
+
+def test_run_training_resumes_when_flag_set(monkeypatch, tmp_path):
+    """M8: resume=True + มี checkpoint → trainer.train ต้องได้ path จริง (ไม่ใช่เริ่มใหม่เงียบ ๆ)"""
+    calls: list = []
+    _stub_training_env(monkeypatch, codes=["train_dummy"], train_calls=calls)
+    (tmp_path / "checkpoint-5").mkdir()
+    q = FakeQueue()
+    wa.run_training(_resume_cfg(str(tmp_path)), q)
+    assert calls == [str(tmp_path / "checkpoint-5")]
+    logs = [m["text"] for m in q.messages if m["type"] == "log"]
+    assert any(t.startswith("resuming from") for t in logs)
+    assert q.messages[-1] == {"type": "status", "state": "finished"}
+
+
+def test_run_training_resume_without_checkpoint_starts_fresh(monkeypatch, tmp_path):
+    """M8: resume=True แต่ไม่มี checkpoint → fresh start + ต้อง log บอก (ห้ามเงียบ)"""
+    calls: list = []
+    _stub_training_env(monkeypatch, codes=["train_dummy"], train_calls=calls)
+    q = FakeQueue()
+    wa.run_training(_resume_cfg(str(tmp_path)), q)
+    assert calls == [None]
+    logs = [m["text"] for m in q.messages if m["type"] == "log"]
+    assert any("starting fresh" in t for t in logs)
+    assert q.messages[-1] == {"type": "status", "state": "finished"}
+
+
+def test_run_training_without_resume_flag_passes_none(monkeypatch, tmp_path):
+    """M8 back-compat: ไม่มี key resume → resume_from_checkpoint=None (คงพฤติกรรมเดิม)"""
+    calls: list = []
+    _stub_training_env(monkeypatch, codes=["train_dummy"], train_calls=calls)
+    q = FakeQueue()
+    wa.run_training(_resume_cfg(str(tmp_path), resume=False), q)
+    assert calls == [None]
+    logs = [m["text"] for m in q.messages if m["type"] == "log"]
+    assert not any("resuming" in t for t in logs)
 
 
 # ---------------------------------------------------------------------------

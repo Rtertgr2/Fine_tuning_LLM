@@ -22,6 +22,8 @@ from configs.safe_defaults import (
     HELDOUT_RATIO,
     MAX_SEQ_LENGTH_DEFAULT,
     MIN_SAMPLE_LINES,
+    NEAR_DUP_JACCARD,
+    NEAR_DUP_MAX_POSTING,
     SEED,
     VAL_EVAL_SAMPLES,
 )
@@ -134,9 +136,61 @@ def is_heldout(code: str, heldout_ratio: float = HELDOUT_RATIO) -> bool:
     return int(digest, 16) / _HEX_MAX < heldout_ratio
 
 
+def _line_shingles(code: str) -> frozenset[bytes]:
+    """md5 ของทุกบรรทัด non-blank หลัง strip (M4) — usedforsecurity=False ตามแนว L1"""
+    return frozenset(
+        hashlib.md5(line.strip().encode("utf-8"), usedforsecurity=False).digest()
+        for line in code.splitlines()
+        if line.strip()
+    )
+
+
+def find_near_dup_leakage(train: list[str], heldout: list[str]) -> list[str]:
+    """M4: train codes ที่ near-dup กับ heldout (line-shingle Jaccard ≥ NEAR_DUP_JACCARD)
+
+    inverted index จาก heldout — ตัด shingle ที่พบใน heldout เกิน NEAR_DUP_MAX_POSTING
+    (บรรทัดสามัญ เช่น "}" — ให้สัญญาณต่ำแลกเวลา) → คู่ candidate ต้อง
+    shared ≥ t/(1+t)·(|A|+|B|) (prune ที่เทียบเท่า Jaccard ≥ t) → คำนวณ Jaccard จริง
+    — คืน train codes ที่ต้องทิ้ง (order คงเดิม, deterministic)
+    """
+    sh_heldout = [_line_shingles(c) for c in heldout]
+    index: dict[bytes, list[int]] = {}
+    for i, sh in enumerate(sh_heldout):
+        for digest in sh:
+            index.setdefault(digest, []).append(i)
+    index = {d: ids for d, ids in index.items() if len(ids) <= NEAR_DUP_MAX_POSTING}
+    t = NEAR_DUP_JACCARD
+    drop: list[str] = []
+    for code in train:
+        sh = _line_shingles(code)
+        if not sh:
+            continue
+        hits: dict[int, int] = {}
+        for digest in sh:
+            for i in index.get(digest, ()):
+                hits[i] = hits.get(i, 0) + 1
+        for i, shared in hits.items():
+            a, b = len(sh), len(sh_heldout[i])
+            if shared * (1 + t) < t * (a + b):
+                continue  # shared ไม่พอให้ถึง threshold — ข้าม (prune ก่อน sqrt)
+            if shared / (a + b - shared) >= t:
+                drop.append(code)
+                break
+    return drop
+
+
 def filter_train_codes(codes: Iterable[str]) -> list[str]:
-    """กรอง heldout ออกจากชุดเทรน — ห้าม train ปนชุดประเมิน (plan.md §8)"""
-    return [code for code in codes if not is_heldout(code)]
+    """กรอง heldout + near-dup ของ heldout ออกจากชุดเทรน (M4) — ห้าม train ปนชุดประเมิน (plan.md §8)
+
+    heldout set ไม่ถูกแตะ (is_heldout เดิม = baseline คงเดิม) — ทิ้งเฉพาะฝั่ง train
+    """
+    pairs = [(code, is_heldout(code)) for code in codes]
+    heldout = [c for c, h in pairs if h]
+    train = [c for c, h in pairs if not h]
+    if heldout:
+        drop = set(find_near_dup_leakage(train, heldout))
+        train = [c for c in train if c not in drop]
+    return train
 
 
 def build_eval_texts(

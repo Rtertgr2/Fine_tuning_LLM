@@ -59,8 +59,9 @@ def _collect_config(
     max_steps,
     code_limit,
     output_dir,
+    resume: bool = False,
 ) -> tuple[dict, float | None]:
-    """Widget values → run_training config (9 keys) + user_params_b (estimator fallback ไม่ใช่ config)"""
+    """Widget values → run_training config (9 keys + resume) + user_params_b (estimator fallback ไม่ใช่ config)"""
     # dropdown คืนชื่อใต้ models/ → resolve เป็น path ที่ from_pretrained โหลดได้ (Hub id ไม่แตะ)
     local_model = resolve_local_model(model_id)
     config = {
@@ -73,6 +74,7 @@ def _collect_config(
         "max_steps": _to_int(max_steps, MAX_STEPS),
         "code_limit": _to_int(code_limit, TRAIN_CODE_LIMIT),
         "lora_rank": _to_int(lora_rank, LORA_RANK_DEFAULT),
+        "resume": bool(resume),  # M8: resume จาก checkpoint ล่าสุด (checkbox — default ปิด)
     }
     user_params = float(params_b) if params_b else None
     return config, user_params
@@ -313,6 +315,10 @@ def build_dashboard(controller) -> gr.Blocks:
                         value=TRAIN_CODE_LIMIT, precision=0, label="Code limit"
                     )
                     output_in = gr.Textbox(value=_DEFAULT_OUTPUT_DIR, label="Output dir")
+                    # M8: resume จาก checkpoint ล่าสุดใน output dir (abort แล้วไม่ต้องเริ่มใหม่จากศูนย์)
+                    resume_in = gr.Checkbox(
+                        value=False, label="Resume from latest checkpoint"
+                    )
                 check_btn = gr.Button("Run Environment Check", variant="secondary")
                 gauge_md = gr.Markdown(
                     "_Not checked yet — run Environment Check before starting_"
@@ -372,6 +378,7 @@ def build_dashboard(controller) -> gr.Blocks:
         cfg_inputs = [
             model_in, params_in, dataset_in, column_in, fim_in,
             lora_in, seq_in, steps_in, code_limit_in, output_in,
+            resume_in,  # M8: ต่อท้าย — handlers รับผ่าน *cfg_values ครบอัตโนมัติ
         ]
         # detect โฟลเดอร์ใหม่ทุกครั้งที่สลับมาแท็บนี้ (dropdown ทั้งคู่ — ส่งค่าเดิมกลับด้วย กัน selection หาย)
         tab1.select(

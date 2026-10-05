@@ -25,14 +25,32 @@ def _write_two(tmp_path: Path, base: dict, finetuned: dict) -> str:
     return str(tmp_path)
 
 
-def test_compare_pass_on_tie(tmp_path, capsys):
+def test_compare_fail_on_tie(tmp_path, capsys):
+    # M9: เดิม tie → PASS (+0.0 ผ่าน gate) — ตอนนี้ต้องดีขึ้นเกิน min-delta ถึงจะ PASS
     r = _result("base", em=5.0, f1=0.2)
     eval_dir = _write_two(tmp_path, r, {**r, "mode": "finetuned"})
     rc = cli_main(["--compare", "--eval-dir", eval_dir])
     out = capsys.readouterr().out
-    assert rc == 0
-    assert "PASS" in out
-    assert "Exact Match" in out
+    assert rc == 1
+    fail_line = next(line for line in out.splitlines() if "FAIL" in line)
+    assert "Exact Match" in fail_line and "Token F1" in fail_line  # ชื่อ metric ครบ (spec §3.3)
+
+
+def test_compare_pass_at_min_delta(tmp_path, capsys):
+    base = _result("base", em=10.0, f1=0.5)
+    fine = _result("finetuned", em=10.1, f1=0.51)  # ตรง min delta ทั้งคู่ → ผ่าน
+    eval_dir = _write_two(tmp_path, base, fine)
+    assert cli_main(["--compare", "--eval-dir", eval_dir]) == 0
+
+
+def test_compare_fail_below_min_delta(tmp_path, capsys):
+    base = _result("base", em=10.0, f1=0.5)
+    fine = _result("finetuned", em=10.05, f1=0.5)  # EM เกิน 0 แต่ต่ำกว่า min → ยัง FAIL
+    eval_dir = _write_two(tmp_path, base, fine)
+    rc = cli_main(["--compare", "--eval-dir", eval_dir])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "min-delta" in out
 
 
 def test_compare_fail_when_base_better(tmp_path, capsys):

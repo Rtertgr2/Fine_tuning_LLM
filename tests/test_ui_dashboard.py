@@ -91,6 +91,16 @@ def test_collect_config_tolerates_cleared_number_fields():
     assert config["code_limit"] == TRAIN_CODE_LIMIT
 
 
+def test_collect_config_resume_flag():
+    """M8: resume checkbox → config['resume'] — default False (10 args เดิมต้องรอด)"""
+    from ui.dashboard import _collect_config
+
+    config, _ = _collect_config(*_cfg_args())
+    assert config["resume"] is False
+    config2, _ = _collect_config(*_cfg_args(), True)
+    assert config2["resume"] is True
+
+
 # ---------------------------------------------------------------------------
 # Task 6: Run Evaluation (handler + widgets + tick lock)
 # ---------------------------------------------------------------------------

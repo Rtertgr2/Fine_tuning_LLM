@@ -27,6 +27,11 @@ from configs.safe_defaults import (
 from core import evaluator as ev
 
 _DEFAULT_OUTPUT_DIR = "data_cache/finetune_run"  # spec §4 table default (ตรงกับ UI)
+# M9: gate ต้องมี min-delta — +0.0 (tie) ห้าม PASS: ต้องดีขึ้นอย่างมีนัยทุก metric
+# EM: n=100 → 1 case = 1.0pt — 0.1pt = ต่ำกว่า 1 case ก็ยังยอมรับได้ แต่ 0.0 ไม่ผ่าน
+# F1: ตรง display precision ของรายงาน (ทศนิยม 2 ตำแหน่ง)
+MIN_DELTA_EM_PCT: float = 0.1
+MIN_DELTA_F1: float = 0.01
 
 
 def _build_config(args: argparse.Namespace) -> dict:
@@ -77,20 +82,33 @@ def _run_compare(eval_dir: Path) -> int:
             print(f"       base:    {q['base_pred']!r}")
             print(f"       tuned:   {q['finetuned_pred']!r}")
 
-    passed = (
-        fine["exact_match_pct"] >= base["exact_match_pct"]
-        and fine["token_f1_mean"] >= base["token_f1_mean"]
-    )
+    # M9: PASS ต้องดีขึ้นเกิน min-delta ทุก metric (เดิม >= ทำให้ tie/+0.0 ผ่าน = gate ไร้ความหมาย)
+    # round 6dp: ค่า float (10.1-10.0 = 0.0999…) ห้ามหลุด boundary "เท่ากับ min = ผ่าน"
+    em_delta = round(fine["exact_match_pct"] - base["exact_match_pct"], 6)
+    f1_delta = round(fine["token_f1_mean"] - base["token_f1_mean"], 6)
+    passed = em_delta >= MIN_DELTA_EM_PCT and f1_delta >= MIN_DELTA_F1
     if passed:
-        print("\nPASS — fine-tuned ≥ base on all metrics")
+        print(
+            f"\nPASS — fine-tuned beats base by ≥ min-delta "
+            f"(EM +{MIN_DELTA_EM_PCT}pt, F1 +{MIN_DELTA_F1}) on all metrics"
+        )
         return 0
-    # spec §3.3: FAIL ต้องบอกชื่อ metric ที่ base ดีกว่า
-    failing = []
-    if fine["exact_match_pct"] < base["exact_match_pct"]:
-        failing.append("Exact Match %")
-    if fine["token_f1_mean"] < base["token_f1_mean"]:
-        failing.append("Token F1")
-    print(f"\nFAIL — base better on: {', '.join(failing)}")
+    # spec §3.3: FAIL ต้องบอกชื่อ metric — แยก regression (base ดีกว่า) กับ stall (ต่ำกว่า min-delta)
+    parts = []
+    regressed, stalled = [], []
+    if em_delta < 0:
+        regressed.append("Exact Match %")
+    elif em_delta < MIN_DELTA_EM_PCT:
+        stalled.append("Exact Match %")
+    if f1_delta < 0:
+        regressed.append("Token F1")
+    elif f1_delta < MIN_DELTA_F1:
+        stalled.append("Token F1")
+    if regressed:
+        parts.append(f"base better on: {', '.join(regressed)}")
+    if stalled:
+        parts.append(f"improvement below min-delta on: {', '.join(stalled)}")
+    print(f"\nFAIL — {'; '.join(parts)}")
     return 1
 
 

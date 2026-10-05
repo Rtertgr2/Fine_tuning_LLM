@@ -101,7 +101,7 @@ Evaluator วัด **FIM Exact Match** + **Token F1** บนชุด held-out 
 # รัน eval บน base+LoRA (checkpoint ล่าสุด) → data_cache/eval/finetuned.json
 .venv/bin/python eval.py --mode finetuned
 
-# เทียบผล — fine-tuned ต้องไม่แย่กว่า base ทุก metric (exit 0 = PASS, 1 = FAIL, 2 = ข้อมูลไม่ครบ)
+# เทียบผล — fine-tuned ต้องดีขึ้นเกิน min-delta (EM ≥ +0.1pt, F1 ≥ +0.01) ทุก metric (exit 0 = PASS, 1 = FAIL, 2 = ข้อมูลไม่ครบ)
 .venv/bin/python eval.py --compare
 ```
 

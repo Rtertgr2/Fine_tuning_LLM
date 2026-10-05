@@ -84,9 +84,17 @@ def test_token_f1_partial_multiset():
     assert abs(ev.token_f1("a a b", "a b c", tok) - (2 / 3)) < 1e-9
 
 
-def test_token_f1_order_insensitive():
+def test_token_f1_order_matters():
+    # M10: เดิม bag-of-tokens → สลับลำดับได้ 1.0 (กราฟ/รายงานโกหก) — ต้อง sequence-aware
     tok = FakeTok()
-    assert ev.token_f1("b a c", "a b c", tok) == 1.0
+    # LCS("b a c","a b c") = 2 (bc/ac) → P=R=2/3 → F1=2/3 — สลับลำดับห้ามได้ 1.0
+    assert abs(ev.token_f1("b a c", "a b c", tok) - (2 / 3)) < 1e-9
+
+
+def test_token_f1_shuffled_middle_not_perfect():
+    tok = FakeTok()
+    assert ev.token_f1("c b a", "a b c", tok) < 1.0  # LCS = 1 → 1/3
+    assert ev.token_f1("a b c", "a b c", tok) == 1.0  # identical ยังได้ 1.0 เต็ม
 
 
 def test_evalcase_frozen():

@@ -241,8 +241,33 @@ def test_filter_train_codes_removes_all_heldout():
     assert held, "fixture ต้องมีทั้งสองฝั่ง (md5 split ~10%)"
     result = db.filter_train_codes(codes)
     assert all(not db.is_heldout(c) for c in result)
-    assert set(result) == set(codes) - held  # ไม่หาย/ไม่เพิ่ม
+    assert set(result) == set(codes) - held  # ไม่หาย/ไม่เพิ่ม (บรรทัด disjoint → ไม่มี near-dup)
     assert db.filter_train_codes(codes) == result  # deterministic
+
+
+def test_near_dup_threshold_boundary():
+    """M4: Jaccard ≥ 0.8 = ทิ้ง — 9/11=0.818 ทิ้ง, 8/12=0.667 เก็บ (ตรง boundary ไม่เลื่อน)"""
+    held = "\n".join(f"line_{i} = {i}" for i in range(10))
+    one_changed = "\n".join([f"line_{i} = {i}" for i in range(9)] + ["line_9 = 999"])
+    two_changed = "\n".join(
+        [f"line_{i} = {i}" for i in range(8)] + ["line_8 = 888", "line_9 = 999"]
+    )
+    assert db.find_near_dup_leakage([one_changed], [held]) == [one_changed]
+    assert db.find_near_dup_leakage([two_changed], [held]) == []
+
+
+def test_filter_train_codes_drops_reindented_twin_of_heldout():
+    """M4: twin ของ heldout (คนละ indent = md5 คนละตัว → ตกคนละฝั่ง) ห้ามอยู่ในชุดเทรน"""
+    heldout = next(
+        c for c in (f"def f_{i}():\n    return {i}" for i in range(5000)) if db.is_heldout(c)
+    )
+    twin = "\n".join("    " + line for line in heldout.splitlines())  # reindent เท่านั้น
+    assert not db.is_heldout(twin)  # twin ต้องอยู่ฝั่ง train — ไม่งั้น test นี้ไม่ได้ exercise near-dup path
+    kept = "def unrelated():\n    return 0"
+    result = db.filter_train_codes([heldout, twin, kept])
+    assert heldout not in result and twin not in result
+    assert kept in result
+    assert db.filter_train_codes([heldout, twin, kept]) == result  # deterministic
 
 
 def test_iter_codes_limits_and_column(monkeypatch):

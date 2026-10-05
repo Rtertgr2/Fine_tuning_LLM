@@ -372,6 +372,8 @@ def run_training(config: dict, queue_) -> None:
                 limit=config["code_limit"],
             )
         )
+        # M4: จำนวนก่อนสร้างชุด — ดูว่า heldout + near-dup ทิ้งไปเท่าไหร่ (ห้ามเงียบ)
+        queue_.put(log_msg("INFO", f"train codes after filters: {len(codes)}"))
         texts = list(
             build_samples(
                 codes,
@@ -426,7 +428,15 @@ def run_training(config: dict, queue_) -> None:
             peft_config=lora,
             callbacks=[callback],
         )
-        trainer.train()
+        # M8: resume flag → โหลด checkpoint ล่าสุดต่อ (ไม่มี checkpoint = fresh + log บอกชัด)
+        resume: str | None = None
+        if config.get("resume"):
+            resume = resume_checkpoint(config["output_dir"])
+            if resume is None:
+                queue_.put(log_msg("INFO", "resume requested but no checkpoint found — starting fresh"))
+            else:
+                queue_.put(log_msg("INFO", f"resuming from {resume}"))
+        trainer.train(resume_from_checkpoint=resume)
         if not callback.aborted:
             # calibration §8.4 — peak VRAM ตอนจบ (test_once: manual gate Task 10 เก็บค่า)
             queue_.put(
@@ -468,6 +478,14 @@ def latest_checkpoint(output_dir: str | Path) -> Path:
     if best is None:
         raise ValueError(f"no checkpoint found in {root}")
     return best[1]
+
+
+def resume_checkpoint(output_dir: str | Path) -> str | None:
+    """M8: checkpoint ล่าสุดเป็น str สำหรับ `trainer.train(resume_from_checkpoint=...)` — ไม่มี → None"""
+    try:
+        return str(latest_checkpoint(output_dir))
+    except ValueError:
+        return None
 
 
 def build_fim_prompt(prefix: str, suffix: str, *, fim_tokens: dict) -> str:

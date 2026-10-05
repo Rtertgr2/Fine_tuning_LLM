@@ -49,3 +49,6 @@ def test_ipc_and_training_blocks():
     # P1 B1: hub fetch pin — revision คงที่ + cache อยู่ใต้ data_cache
     assert sd.HF_HUB_REVISION == "main"
     assert sd.HF_HUB_CACHE_DIR == "data_cache/hf_hub"
+    # M4: near-dup leakage guard — threshold + posting cap (ดู core/dataset_builder.py)
+    assert sd.NEAR_DUP_JACCARD == 0.8
+    assert sd.NEAR_DUP_MAX_POSTING == 50
