@@ -229,11 +229,18 @@ def _make_handlers(controller) -> dict:
                 f"**Failed to load eval results:** {html.escape(str(exc))}</span>"
             )
 
-    def on_save_adapter(output_dir):
+    def on_save_adapter(*cfg_values):
         try:
-            dest = save_adapter_only(output_dir)
+            config, _user_params = _collect_config(*cfg_values)
+        except ValueError as exc:
+            # model path จริงแต่นอก sandbox → error แทน raise ออกจาก handler (H2 escape เหมือน on_merge)
+            return (
+                f'<span style="color:#dc2626">**Save failed:** {html.escape(str(exc))}</span>'
+            )
+        try:
+            dest = save_adapter_only(config["output_dir"], config=config)
             return f'<span style="color:#16a34a">✅ Adapter saved → `{html.escape(str(dest))}`</span>'
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             return f'<span style="color:#dc2626">**Save failed:** {html.escape(str(exc))}</span>'
 
     def on_merge(*cfg_values):
@@ -432,7 +439,7 @@ def build_dashboard(controller) -> gr.Blocks:
             h["on_predict"], inputs=cfg_inputs + [prefix_in, suffix_in],
             outputs=[predict_out, predict_error_md], concurrency_id="model_load",
         )
-        save_btn.click(h["on_save_adapter"], inputs=[output_in], outputs=[export_msg])
+        save_btn.click(h["on_save_adapter"], inputs=cfg_inputs, outputs=[export_msg])
         merge_btn.click(
             h["on_merge"], inputs=cfg_inputs, outputs=[export_msg],
             concurrency_id="model_load",

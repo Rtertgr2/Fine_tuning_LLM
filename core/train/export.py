@@ -9,17 +9,30 @@ import shutil
 from pathlib import Path
 
 import torch
+from huggingface_hub import model_info
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from core.contracts.manifest import build_run_manifest, write_run_manifest
 from core.data.fim import ensure_fim_tokens
 from core.train.args import validate_config, validate_output_dir
 from core.train.runner import latest_checkpoint
 
 
+def _model_license(model_id: str) -> str | None:
+    """best-effort ครั้งเดียวตอน export — ออฟไลน์/hub ล่ม/cardData ไม่มี = None (null-over-zero)"""
+    try:
+        return model_info(model_id).cardData.get("license")
+    except Exception:
+        return None
+
+
 def save_adapter_only(
-    output_dir: str | Path, *, exports_dir: str | Path = "exports"
+    output_dir: str | Path, *, config: dict, exports_dir: str | Path = "exports"
 ) -> Path:
-    """คัดลอกเฉพาะไฟล์ LoRA จาก checkpoint ล่าสุด → exports/<output_dir.name>/ (file op ไม่กิน VRAM)"""
+    """คัดลอกเฉพาะไฟล์ LoRA จาก checkpoint ล่าสุด → exports/<output_dir.name>/ (file op ไม่กิน VRAM)
+
+    `config` = REQUIRED_CONFIG_KEYS ครบ — ใช้เขียน run_manifest.json (FT-010, เขียนตอน export สำเร็จเท่านั้น)
+    """
     validate_output_dir(output_dir)  # Sec-10: H1 gate ที่ save — คุ้มครอง caller ที่ไม่ผ่าน validate_config
     ckpt = latest_checkpoint(output_dir)
     config_src = ckpt / "adapter_config.json"
@@ -32,6 +45,12 @@ def save_adapter_only(
     dest.mkdir(parents=True, exist_ok=True)
     for src in (config_src, *weight_srcs, *index_srcs):
         shutil.copy2(src, dest / src.name)
+    # step สุดท้าย — export พังก่อนหน้า = ห้ามมี manifest ค้างหลอก (invariant #3)
+    manifest = build_run_manifest(
+        config, export_mode="adapter_only", export_path=dest,
+        license=_model_license(config["model_id"]),
+    )
+    write_run_manifest(manifest, dest)
     return dest
 
 
@@ -61,4 +80,11 @@ def merge_export(config: dict) -> Path:
     dest.mkdir(parents=True, exist_ok=True)
     merged.save_pretrained(dest)
     tokenizer.save_pretrained(dest)
+    # step สุดท้าย — เหมือน save_adapter_only: export สำเร็จเท่านั้น (invariant #3)
+    manifest = build_run_manifest(
+        config, export_mode="merged", export_path=dest,
+        num_params=merged.num_parameters(), dtype="bfloat16",
+        license=_model_license(config["model_id"]),
+    )
+    write_run_manifest(manifest, dest)
     return dest
