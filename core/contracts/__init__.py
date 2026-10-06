@@ -4,6 +4,13 @@ import ได้เฉพาะ stdlib + `configs.safe_defaults` เท่าน
 `core.train` / `core.compress` / `core.runtime` เข้ามา (dependency ไหลลงด้านเดียว)
 """
 
+from core.contracts.benchmark import REPORT_KEYS, validate_report
 from core.contracts.manifest import RunManifest, build_run_manifest, write_run_manifest
 
-__all__ = ["RunManifest", "build_run_manifest", "write_run_manifest"]
+__all__ = [
+    "REPORT_KEYS",
+    "RunManifest",
+    "build_run_manifest",
+    "validate_report",
+    "write_run_manifest",
+]
