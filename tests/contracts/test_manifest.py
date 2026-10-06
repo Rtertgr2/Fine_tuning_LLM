@@ -102,3 +102,12 @@ def test_write_run_manifest_atomic_and_parseable(tmp_path):
     assert json.loads(out.read_text(encoding="utf-8")) == m.to_dict()
     leftovers = [p.name for p in (tmp_path / "dest").iterdir() if p.suffix == ".tmp"]
     assert leftovers == []          # os.replace ทิ้ง tmp ไว้ไม่ได้
+
+
+def test_package_exports_all_contracts():
+    """core.contracts (จุดเดียว) ต้อง expose สัญญาครบทั้ง 3"""
+    import core.contracts as c
+
+    for name in ("RunManifest", "build_run_manifest", "write_run_manifest",
+                 "REPORT_KEYS", "validate_report", "LocalRuntime"):
+        assert hasattr(c, name), name
