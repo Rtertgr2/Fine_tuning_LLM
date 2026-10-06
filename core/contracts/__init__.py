@@ -6,8 +6,10 @@ import ได้เฉพาะ stdlib + `configs.safe_defaults` เท่าน
 
 from core.contracts.benchmark import REPORT_KEYS, validate_report
 from core.contracts.manifest import RunManifest, build_run_manifest, write_run_manifest
+from core.contracts.runtime import LocalRuntime
 
 __all__ = [
+    "LocalRuntime",
     "REPORT_KEYS",
     "RunManifest",
     "build_run_manifest",
