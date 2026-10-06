@@ -558,13 +558,13 @@ def test_on_save_adapter_escapes_dest_and_error(monkeypatch):
 
     h = dash._make_handlers(_StartCtl("unused"))
     monkeypatch.setattr(
-        dash, "save_adapter_only", lambda _p: (_ for _ in ()).throw(ValueError("boom <b>x</b>"))
+        dash, "save_adapter_only", lambda _p, config: (_ for _ in ()).throw(ValueError("boom <b>x</b>"))
     )
-    err_out = h["on_save_adapter"]("out")
+    err_out = h["on_save_adapter"](*_cfg_args())
     assert "<b>" not in err_out and "&lt;b&gt;" in err_out
 
-    monkeypatch.setattr(dash, "save_adapter_only", lambda _p: 'dir<i>"quoted"</i>')
-    ok_out = h["on_save_adapter"]("out")
+    monkeypatch.setattr(dash, "save_adapter_only", lambda _p, config: 'dir<i>"quoted"</i>')
+    ok_out = h["on_save_adapter"](*_cfg_args())
     assert "<i>" not in ok_out and "&lt;i&gt;" in ok_out
 
 
