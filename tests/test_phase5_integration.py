@@ -24,8 +24,8 @@ from configs.safe_defaults import (
     MAX_STEPS,
     TRAIN_CODE_LIMIT,
 )
-from core import evaluator as ev
-from core import hardware as hw
+from core.eval import evaluator as ev
+from core.infra import hardware as hw
 from ui.controller import TrainingController
 
 pytestmark = pytest.mark.integration
@@ -141,7 +141,7 @@ def test_datacache_growth_bounded(capsys):
 
     before = dir_gb("data_cache")
     tokenizer = AutoTokenizer.from_pretrained(DEFAULT_MODEL_ID)
-    cases = ev.build_eval_cases(
+    cases, _skipped = ev.build_eval_cases(
         dataset_id=DEFAULT_DATASET_ID,
         dataset_column=DEFAULT_DATASET_COLUMN,
         limit=512,

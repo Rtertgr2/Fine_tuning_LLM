@@ -86,7 +86,8 @@ def token_f1(pred: str, gt: str, tokenizer) -> float
 def run_eval(config, *, mode: Literal["base","finetuned"]) -> dict
     # โหลด base (dtype=bfloat16, sdpa) → mode finetuned คือ wrap PeftModel จาก latest_checkpoint
     # วน 100 cases → {exact_match, token_f1, samples[5]} + aggregates
-    # คืน {"mode", "n", "exact_match_pct", "token_f1_mean", "per_case", "samples"}
+    # คืน {"mode", "n", "skipped_long_middle", "exact_match_pct", "token_f1_mean", "per_case", "samples"}
+    # (2026-10-04: build_eval_cases คืน (cases, skipped_long_middle) — skipped ห้ามเงียบ)
 ```
 
 - **VRAM:** โหลดโมเดลทีละ 1 ตัวตลอด (ไม่ stacking) — `mode` แยกการรัน
@@ -158,3 +159,13 @@ def run_eval(config, *, mode: Literal["base","finetuned"]) -> dict
 - Streaming eval (ไม่โหลดทั้งชุดเข้า memory) — 100 cases ยังเล็ก ไม่ต้อง
 - เปรียบเทียบหลาย checkpoint (100 vs 500) — นอก scope
 - BLEU/CodeBLEU — plan กำหนดแค่ Exact Match + Token F1
+
+## 9. อัปเดตสเปค 2026-10-04 — ML logic review (human partner อนุญาตให้แก้สเปค)
+
+- **`skipped_long_middle` รายงานชัด** — `build_eval_cases` → tuple `(cases, skipped_long_middle)`; `run_eval` ใส่ `"skipped_long_middle"` ใน summary JSON (`base.json`/`finetuned.json`). เดิม skip middle > 256 tokens แบบเงียบ ๆ → EM/F1 ถูกอ่านว่า representative ทั้งที่วัดเฉพาะเคส span สั้น (เคสยาวถูกตัดทิ้งไม่รู้ตัว)
+- **Gate `--compare`: `fine >= base` ทุก metric = non-regression gate — ถูกต้องแล้ว ไม่ใส่ min-delta** (wontfix by design): EM% บน n=100, `+0.0` = ไม่ถดถอย = ควร PASS; ใส่ epsilon จะทำให้เคส "เท่าเดิม" ถูก fail ทั้งที่ไม่ได้ถดถอย
+- **นิยาม metric (บันชัด — deferred การเปลี่ยน):**
+  - `exact_match` = normalize `\r\n`→`\n` + strip เท่านั้น (ไม่ normalize whitespace ซ้อน/case/punctuation)
+  - `token_f1` = multiset (bag-of-tokens) ของ token ids — **ไม่สนลำดับ** (middle สลับลำดับได้ F1=1.0) · empty ตรงกัน=1.0, ฝั่งเดียวว่าง=0.0
+  - ทั้งคู่เป็นข้อจำกัดที่รู้ตัว — **Deferred**: normalize เพิ่ม/ทำ F1 ตามลำดับ = ค่า metric ทุกชุดเปลี่ยน → baseline ที่วัดไว้ (n=100, checkpoint-500) ใช้ไม่ได้อีก (เคส L1 เดิม) → ทำพร้อมกับตกลง regenerate baselines เท่านั้น
+- **Deferred (อ้างเหตุผลใน phase2/3):** near-dup dedup ข้าม split (เปลี่ยน heldout split) · training resume (feature ใหม่)

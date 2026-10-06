@@ -98,7 +98,7 @@ git add core/ tests/test_hardware.py && git commit -m "feat: core/hardware.py �
 
 - [ ] **Step 1: เขียน `tests/test_estimator.py`** (monkeypatch `core.estimator.hf_hub_download` เพื่อไม่ใช้ network):
   - `test_resolve_default_model`: `resolve_model_spec(DEFAULT_MODEL_ID, None)` → `num_params == 498_431_872`, `hidden_size == 896`, `num_layers == 24`, `source == "default"`
-  - `test_resolve_from_config`: fetch คืน fixture `{"hidden_size": 64, "num_hidden_layers": 2, "intermediate_size": 128, "vocab_size": 1000}` → `num_params == 145_920` (สูตร: `layers×(4d²+3·d·i) + vocab×d`), `source == "hf_config"`
+  - `test_resolve_from_config`: fetch คืน fixture `{"hidden_size": 64, "num_hidden_layers": 2, "intermediate_size": 128, "vocab_size": 1000}` → `num_params == 209_920` (สูตร 2026-10-04: `layers×(4d²+3·d·i) + vocab×d + lm_head` — fixture ไม่มี key `tie_word_embeddings` → นับ lm_head แยก; เดิม 145_920), `source == "hf_config"`
   - `test_blocked_when_params_unknown`: fetch raise + `user_params_b=None` → `verdict == "blocked"`, `"พารามิเตอร์" in reason`
   - `test_user_fallback_params`: fetch raise + `user_params_b=1.5` → `spec_source == "user_fallback"`, `weights_gb ≈ 1.5e9×2/1024³`, ไม่ blocked
   - `test_classify_boundaries`: `free=20.0` (0.75×20=15.0, 0.90×20=18.0 exact) → `classify(15.0,20)=="safe"`, `classify(15.001,20)=="warning"`, `classify(18.0,20)=="warning"`, `classify(18.001,20)=="blocked"`
@@ -108,9 +108,9 @@ git add core/ tests/test_hardware.py && git commit -m "feat: core/hardware.py �
 - [ ] **Step 2: เพิ่ม constant ใน `configs/safe_defaults.py`** (ตาม block "Estimator" ด้านบน)
 
 - [ ] **Step 3: Implement `core/estimator.py`**
-  - `resolve_model_spec`: (1) `model_id == DEFAULT_MODEL_ID` → ค่า hardcode ไม่แตะ network (2) else `from huggingface_hub import hf_hub_download` (import ระดับ module เพื่อให้ test monkeypatch ที่ `core.estimator.hf_hub_download` ได้) → `hf_hub_download(model_id, "config.json")` (ค่า default cache = แคชครั้งแรกตามสเปก) → parse → `num_params = layers×(4·d² + 3·d·i) + vocab×d` (สมมติ MHA — มากกว่าจริงเล็กน้อย = ทิศทางปลอดภัย), `source="hf_config"` (3) จับ exception → `user_params_b is None` → raise `ModelSpecUnavailable`; มีค่า → `ModelSpec(int(user_params_b×1e9), ESTIMATOR_FALLBACK_HIDDEN_SIZE, ESTIMATOR_FALLBACK_NUM_LAYERS, "user_fallback")` (dims สำรอง = upper bound อนุรักษ์นิยมสำหรับ activation)
+  - `resolve_model_spec`: (1) `model_id == DEFAULT_MODEL_ID` → ค่า hardcode ไม่แตะ network (2) else `from huggingface_hub import hf_hub_download` (import ระดับ module เพื่อให้ test monkeypatch ที่ `core.estimator.hf_hub_download` ได้) → `hf_hub_download(model_id, "config.json")` (ค่า default cache = แคชครั้งแรกตามสเปก) → parse → `num_params = layers×(4·d² + 3·d·i) + vocab×d + lm_head` (สมมติ MHA — มากกว่าจริงเล็กน้อย = ทิศทางปลอดภัย; **2026-10-04**: `lm_head = vocab×d` เมื่อ `tie_word_embeddings != true`/ไม่มี key — เดิมนับครั้งเดียว = undercount ~7% สำหรับโมเดล untied) `source="hf_config"` (3) จับ exception → `user_params_b is None` → raise `ModelSpecUnavailable`; มีค่า → `ModelSpec(int(user_params_b×1e9), ESTIMATOR_FALLBACK_HIDDEN_SIZE, ESTIMATOR_FALLBACK_NUM_LAYERS, "user_fallback")` (dims สำรอง = upper bound อนุรักษ์นิยมสำหรับ activation)
   - `classify`: `total <= VRAM_SAFE_RATIO×free` → safe; `total <= VRAM_WARNING_RATIO×free` → warning; else blocked
-  - `estimate`: (1) `hardware["status"] != "ready"` → คืน verdict=status, reason จาก mapping, component = 0.0 (2) `ModelSpecUnavailable` → blocked + reason "ไม่ทราบจำนวนพารามิเตอร์ — ต้องกรอก P (B) ใน UI (ห้ามเดา)" (3) สูตร: `weights = P×2`, `trainable = P_lora×10` bytes โดย `P_lora = P × (DEFAULT_LORA_NUM_PARAMS/DEFAULT_MODEL_NUM_PARAMS)`, `activations = batch_size×seq_length×d×N×2` bytes (gradient checkpointing เปิด), `overhead = ESTIMATOR_OVERHEAD_GB×1024³` (4) GB = `/1024³`, `classify` → verdict
+  - `estimate`: (1) `hardware["status"] != "ready"` → คืน verdict=status, reason จาก mapping, component = 0.0 (2) `ModelSpecUnavailable` → blocked + reason "ไม่ทราบจำนวนพารามิเตอร์ — ต้องกรอก P (B) ใน UI (ห้ามเดา)" (3) สูตร: `weights = P×2`, `trainable = P_lora×10` bytes โดย `P_lora = P × (DEFAULT_LORA_NUM_PARAMS/DEFAULT_MODEL_NUM_PARAMS)`, `activations = batch_size×seq_length×d×N×2 + batch_size×seq_length×vocab×4` bytes (gradient checkpointing เก็บ boundary ต่อชั้น; **2026-10-04**: +logits float32 ตอน compute loss — เดิมขาด = undercount), `overhead = ESTIMATOR_OVERHEAD_GB×1024³` (4) GB = `/1024³`, `classify` → verdict
   - reason ภาษาไทยสั้น ๆ ต่อ verdict (เช่น "ปลอดภัย — ใช้ ≤75% ของ VRAM ว่าง")
 
 - [ ] **Step 4: Commit (ยังไม่รัน test)**
@@ -179,3 +179,19 @@ Expected: PASS ทุก test (ชุดเดิม 7 ตัวของ Phase 
 Run: `git log --oneline` ยืนยัน commit ครบ + `git status` ว่าง
 
 - [ ] **Step 4: รายงาน Phase 2 Gate ให้ human partner** — ผ่านทั้งหมด = พร้อม merge/ไปต่อ Phase 3
+
+## อัปเดตสเปค 2026-10-04 — ML logic review (human partner อนุญาตให้แก้สเปค)
+
+**Estimator (correctness):**
+- สูตร `_spec_from_config` = `layers×(4d²+3·d·i) + vocab×d + lm_head` — `lm_head = vocab×d` เมื่อ `tie_word_embeddings != true` **หรือไม่มี key** (ทิศทาง overcount = ปลอดภัยตามหลักโปรเจกต์). เดิมนับ `vocab×d` ครั้งเดียว = undercount ~7% สำหรับโมเดล untied (เช่น Qwen2.5-7B `tie:false`) → น้ำหนักต่ำกว่าจริง ~1.1GB → verdict "safe" อาจ OOM จริง ขัดกับคอมเมนต์ "overcount = ปลอดภัย"
+- `ModelSpec` มี field ใหม่ `vocab_size: int = 0` — 0 = `user_fallback` (ไม่ทราบที่เชื่อถือได้) → ไม่บวก logits
+- `estimate`: `activations = batch×seq×d×N×2 + batch×seq×vocab×4` (logits float32 ตอน compute loss — ก้อนใหญ่สุดที่หายไป; โดยเฉพาะ b/s ใหญ่) · คง: MHA overcount + default hardcode `498_431_872` (โมเดล default = tied → นับแล้วครบ, วัดจริง 494,032,768 = +0.9% ปลอดภัย)
+- ใหม่: `DEFAULT_MODEL_VOCAB_SIZE = 151_936` (config.json จริงของ Qwen2.5-Coder-0.5B)
+
+**Dataset — FIM budget (correctness):**
+- `build_samples` FIM branch (มี tokenizer): middle อยู่ท้าย PSM → **tail-truncate = ห้าม** — หด suffix (≤ ครึ่ง budget ที่เหลือ) + prefix (ที่เหลือ) แบบเดียวกับ `build_eval_cases`; ถ้า `middle + fim-token overhead > budget` → **drop ทั้งก้อน** (ไม่ yield)
+- เดิม: ตัดหาง PSM แล้วประกบ EOS ตรงจุดตัด = สอนโมเดล "FIM → หยุดกลางคัน" ทั้งที่ eval ไม่ตัด middle เลย (skip เคสยาว) → supervision บิดเบี้ยว + train/eval distribution ไม่ตรง
+- plain LM (ไม่ใช่ FIM) + ไม่มี tokenizer: เหมือนเดิม (tail-truncate + EOS = ถูกต้อง)
+
+**Deferred (มีเหตุผล — ห้ามทำเงียบ ๆ):**
+- near-duplicate dedup ข้าม train/heldout — เปลี่ยน md5 bucket = split ขยับ = baseline eval (n=100) + checkpoint-500 เทียบกันไม่ได้อีก (เคส L1 เดิม) → เปิดไว้ถ้าตกลง regenerate baselines

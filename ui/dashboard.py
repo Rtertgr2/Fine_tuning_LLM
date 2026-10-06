@@ -16,20 +16,20 @@ from configs.safe_defaults import (
     DEFAULT_DATASET_COLUMN,
     DEFAULT_DATASET_ID,
     DEFAULT_MODEL_ID,
+    DEFAULT_OUTPUT_DIR,
     LORA_RANK_DEFAULT,
     MAX_SEQ_LENGTH_CAP,
     MAX_SEQ_LENGTH_DEFAULT,
     MAX_STEPS,
     TRAIN_CODE_LIMIT,
 )
-from core import evaluator as ev
-from core.dataset_builder import list_datasets
-from core.estimator import list_models, resolve_local_model
-from core.trainer_worker import merge_export, save_adapter_only
+from core.eval import evaluator as ev
+from core.data.dataset_builder import list_datasets
+from core.infra.estimator import list_models, resolve_local_model
+from core.train.export import merge_export, save_adapter_only
 from ui.components import build_metric_plot, verdict_style
 from ui.controller import run_predict
 
-_DEFAULT_OUTPUT_DIR = "data_cache/finetune_run"  # spec §4 table default (ไม่อยู่ใน safe_defaults — มีที่เดียว)
 _STATUS_COLORS = {
     "idle": "#6b7280",
     "starting": "#ca8a04",
@@ -40,7 +40,6 @@ _STATUS_COLORS = {
     "aborted": "#dc2626",
 }
 _START_VERDICTS = ("safe", "warning")
-_LOG_TAIL_LINES = 200
 
 
 def _fim_choices() -> list[str]:
@@ -59,8 +58,9 @@ def _collect_config(
     max_steps,
     code_limit,
     output_dir,
+    resume: bool = False,
 ) -> tuple[dict, float | None]:
-    """Widget values → run_training config (9 keys) + user_params_b (estimator fallback ไม่ใช่ config)"""
+    """Widget values → run_training config (9 keys + resume) + user_params_b (estimator fallback ไม่ใช่ config)"""
     # dropdown คืนชื่อใต้ models/ → resolve เป็น path ที่ from_pretrained โหลดได้ (Hub id ไม่แตะ)
     local_model = resolve_local_model(model_id)
     config = {
@@ -73,6 +73,7 @@ def _collect_config(
         "max_steps": _to_int(max_steps, MAX_STEPS),
         "code_limit": _to_int(code_limit, TRAIN_CODE_LIMIT),
         "lora_rank": _to_int(lora_rank, LORA_RANK_DEFAULT),
+        "resume": bool(resume),  # M8: resume จาก checkpoint ล่าสุด (checkbox — default ปิด)
     }
     user_params = float(params_b) if params_b else None
     return config, user_params
@@ -141,12 +142,7 @@ def _make_handlers(controller) -> dict:
             f'**Status:** <span style="color:{color}">{snap.status.upper()}</span>'
         )
         fig = build_metric_plot(snap.metrics)
-        shown = snap.logs[-_LOG_TAIL_LINES:]
-        logs = "\n".join(shown)
-        if len(snap.logs) > _LOG_TAIL_LINES:
-            # M3: บอกให้รู้ว่าถูกตัด — spec ขอ "ครบทุกบรรทัด" แต่ textbox ยาวไม่ได้ (performance)
-            hidden = len(snap.logs) - len(shown)
-            logs = f"… (+{hidden} older lines not shown)\n" + logs
+        logs = "\n".join(snap.logs)  # Spec-5: live log ครบทุกบรรทัด (ไม่ตัด tail)
         banners = []
         if snap.error:
             banners.append(
@@ -224,14 +220,23 @@ def _make_handlers(controller) -> dict:
         except Exception as exc:  # noqa: BLE001
             return f'<span style="color:#dc2626">**Merge failed:** {html.escape(str(exc))}</span>'
 
-    def on_refresh_choices():
+    def on_refresh_choices(model_value, dataset_value):
         """สลับมาแท็บ Configuration → detect โฟลเดอร์ models/ + datasets/ ใหม่
 
         dropdown ทั้งคู่: hub default + โฟลเดอร์ท้องถิ่นที่มีอยู่ ณ ตอนนั้น
+        P1 C3: คืน instance (gr.update = deprecated path ของ gradio 6) + value เดิมคงไว้
         """
         return (
-            gr.update(choices=[DEFAULT_MODEL_ID, *list_models()]),
-            gr.update(choices=[DEFAULT_DATASET_ID, *list_datasets()]),
+            gr.Dropdown(
+                choices=[DEFAULT_MODEL_ID, *list_models()],
+                value=model_value,
+                allow_custom_value=True,
+            ),
+            gr.Dropdown(
+                choices=[DEFAULT_DATASET_ID, *list_datasets()],
+                value=dataset_value,
+                allow_custom_value=True,
+            ),
         )
 
     return {
@@ -258,7 +263,7 @@ def build_dashboard(controller) -> gr.Blocks:
 
         with gr.Tabs():
             # ---------------------------------------------------------- #
-            # Tab 1: Configuration & Pre-flight (9 ฟิลด์ + params fallback)
+            # Tab 1: Configuration & Pre-flight (10 ฟิลด์ + params fallback)
             # ---------------------------------------------------------- #
             with gr.Tab("Configuration & Pre-flight") as tab1:
                 with gr.Row():
@@ -288,9 +293,8 @@ def build_dashboard(controller) -> gr.Blocks:
                         label="FIM registry",
                     )
                 with gr.Row():
-                    lora_in = gr.Slider(
-                        minimum=8, maximum=32, step=8, value=LORA_RANK_DEFAULT,
-                        label="LoRA rank",
+                    lora_in = gr.Dropdown(
+                        choices=[8, 16, 32], value=LORA_RANK_DEFAULT, label="LoRA rank",
                     )
                     seq_in = gr.Slider(
                         minimum=64, maximum=MAX_SEQ_LENGTH_CAP, step=64,
@@ -303,7 +307,11 @@ def build_dashboard(controller) -> gr.Blocks:
                     code_limit_in = gr.Number(
                         value=TRAIN_CODE_LIMIT, precision=0, label="Code limit"
                     )
-                    output_in = gr.Textbox(value=_DEFAULT_OUTPUT_DIR, label="Output dir")
+                    output_in = gr.Textbox(value=DEFAULT_OUTPUT_DIR, label="Output dir")
+                    # M8: resume จาก checkpoint ล่าสุดใน output dir (abort แล้วไม่ต้องเริ่มใหม่จากศูนย์)
+                    resume_in = gr.Checkbox(
+                        value=False, label="Resume from latest checkpoint"
+                    )
                 check_btn = gr.Button("Run Environment Check", variant="secondary")
                 gauge_md = gr.Markdown(
                     "_Not checked yet — run Environment Check before starting_"
@@ -355,7 +363,7 @@ def build_dashboard(controller) -> gr.Blocks:
                 )
                 eval_error_md = gr.Markdown("")
 
-        timer = gr.Timer(value=1.0, active=True)
+        timer = gr.Timer(value=1.0)
 
         # -------------------------------------------------------------- #
         # Wiring (ต้องอยู่ใน Blocks context — gradio 6 บังคับ)
@@ -363,15 +371,24 @@ def build_dashboard(controller) -> gr.Blocks:
         cfg_inputs = [
             model_in, params_in, dataset_in, column_in, fim_in,
             lora_in, seq_in, steps_in, code_limit_in, output_in,
+            resume_in,  # M8: ต่อท้าย — handlers รับผ่าน *cfg_values ครบอัตโนมัติ
         ]
-        # detect โฟลเดอร์ใหม่ทุกครั้งที่สลับมาแท็บนี้ (dropdown ทั้งคู่)
-        tab1.select(h["on_refresh_choices"], outputs=[model_in, dataset_in])
+        # detect โฟลเดอร์ใหม่ทุกครั้งที่สลับมาแท็บนี้ (dropdown ทั้งคู่ — ส่งค่าเดิมกลับด้วย กัน selection หาย)
+        tab1.select(
+            h["on_refresh_choices"],
+            inputs=[model_in, dataset_in],
+            outputs=[model_in, dataset_in],
+        )
 
         check_btn.click(
             h["on_check"], inputs=cfg_inputs,
             outputs=[gauge_md, verdict_state, start_btn],
         )
-        start_btn.click(h["on_start"], inputs=cfg_inputs, outputs=[start_error_md])
+        # P0 C1: Start อยู่ใน group เดียวกับ predict/merge/eval — กัน 2 process โหลดโมเดลพร้อมกัน (OOM)
+        start_btn.click(
+            h["on_start"], inputs=cfg_inputs, outputs=[start_error_md],
+            concurrency_id="model_load",
+        )
         abort_btn.click(h["on_abort"], inputs=[], outputs=[start_error_md])
         timer.tick(
             h["on_tick"], inputs=[verdict_state],

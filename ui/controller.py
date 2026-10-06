@@ -22,24 +22,21 @@ from pathlib import Path
 from queue import Empty
 from typing import NamedTuple
 
-from configs.safe_defaults import MAX_SEQ_LENGTH_CAP
-from core import hardware
-from core.estimator import EstimateResult, estimate
-from core.ipc_bridge import (
+from configs.safe_defaults import MAX_SEQ_LENGTH_DEFAULT
+from core.infra import hardware
+from core.infra.estimator import EstimateResult, estimate
+from core.infra.ipc_bridge import (
     TERMINAL_STATUSES,
     TRAINING_STATUSES,
     abort_process,
     validate_message,
     watchdog_error,
 )
-from core.evaluator import EVAL_DIR
-from core.trainer_worker import (
-    EVAL_DONE,
-    predict_middle,
-    run_eval_worker,
-    run_training,
-    validate_config,
-)
+from core.eval.evaluator import EVAL_DIR
+from core.eval.worker import EVAL_DONE, run_eval_worker
+from core.train.args import validate_config
+from core.train.predict import predict_middle
+from core.train.runner import run_training
 
 # `get_nowait()` ของ mp.Queue อาจคาย error อื่นนอกจาก Empty เมื่อ pipe ถูก kill กลางเขียน
 # (truncated pickle → EOFError/OSError/UnpicklingError) — ห้ามให้หลุดออกจาก tick() ไม่งั้น UI ค้างถาวร
@@ -91,16 +88,14 @@ class TrainingController:
 
         verdict ที่ไม่ใช่ safe/warning (blocked/no_xpu/insufficient_*) → dashboard ปิดปุ่ม Start
         """
-        # output_dir อาจยังไม่ถูกสร้าง (fresh start) — ใช้ ancestor ที่มีอยู่จริงแทน (disk อยู่ volume เดียวกัน)
-        out_dir = Path(config.get("output_dir", "."))
-        while not out_dir.exists() and out_dir != out_dir.parent:
-            out_dir = out_dir.parent
+        # output_dir อาจยังไม่ถูกสร้าง (fresh start) — ใช้ ancestor ที่มีอยู่จริงแทน (disk อยู่ volume เดียวกัน) (D6)
+        out_dir = hardware.existing_ancestor(config.get("output_dir", "."))
         hw = hardware.inspect(output_dir=str(out_dir))
         return estimate(
             hw,
             model_id=config["model_id"],
             user_params_b=user_params_b,
-            seq_length=config.get("max_seq_length", MAX_SEQ_LENGTH_CAP),
+            seq_length=config.get("max_seq_length", MAX_SEQ_LENGTH_DEFAULT),
         )
 
     # ------------------------------------------------------------------ #
@@ -176,6 +171,10 @@ class TrainingController:
             watchdog_text = None
             if watchdog is not None:
                 watchdog_text = f"{watchdog['message']}\n{watchdog['traceback']}"
+                # Sec-14: zombie = process ตายแล้ว — คืนสถานะ terminal ทันที
+                # (ไม่งั้น training_active ค้าง True = Start ล็อกถาวร)
+                self._status = "aborted"
+                self._process = None
             return TickSnapshot(
                 status=self._status,
                 metrics=list(self._metrics),
@@ -220,7 +219,7 @@ class TrainingController:
 
     def _handle_message(self, msg: dict) -> None:
         mtype = msg["type"]
-        if mtype == "metric":
+        if mtype in ("metric", "val_metric"):
             self._metrics.append(msg)
         elif mtype == "log":
             self._append_log(msg["level"], msg["text"])

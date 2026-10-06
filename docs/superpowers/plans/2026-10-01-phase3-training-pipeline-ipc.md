@@ -213,3 +213,16 @@ git commit -m "feat: core/ipc_bridge.py message protocol + watchdog + abort esca
   Expected: `PIPELINE SMOKE PASSED`, exit 0 (รันบน Arc B580 จริง; โหลดโมเดล+stream dataset ครั้งแรกใช้เวลาหลายนาที)
 - [ ] **Step 7: รัน unit suite ทั้งหมด** — `../../.venv/bin/python -m pytest tests/ -v` → PASS ทั้งหมด (ของเดิม 28 + ใหม่ 22 = 50)
 - [ ] **Step 8: Commit** — `git add core/ scripts/pipeline_smoke.py tests/ && git commit -m "feat: run_training subprocess pipeline + pipeline smoke (full/abort/VRAM)"`
+
+## อัปเดตสเปค 2026-10-04 — ML logic review (human partner อนุญาตให้แก้สเปค)
+
+**Validation loop ระหว่างเทรน (ใหม่):**
+- `configs/safe_defaults.py`: `VAL_EVAL_SAMPLES = 32` (heldout ต่อรอบ eval), `VAL_EVAL_MIN_STEPS = 50` (ถี่กว่านี้ overhead ไม่คุ้ม)
+- `build_training_args(..., has_eval_dataset: bool = True)`: `eval_strategy = "steps" if has_eval_dataset else "no"` · `eval_steps = max(VAL_EVAL_MIN_STEPS, max_steps // 10)` (smoke 6 steps → 50 > max_steps = ไม่ eval กลางทาง · **ขัด line109 เดิม**: `bf16 is True` → ตอนนี้ dynamic ดูกาวна่าง `_xpu_bf16_supported`)
+- ใหม่: `core/dataset_builder.build_eval_texts(codes, *, fim_tokens, eos, tokenizer, max_seq_length, limit=VAL_EVAL_SAMPLES)` — heldout-only (ไม่เคยเห็นตอนเทรน = ไม่ leak), ใช้ `build_samples` เดียวกับ train (seed/fim_rate เดียวกัน → val loss เทียบได้), หยุดอ่านทันทีครบ limit, ไม่มี heldout → `[]` → `run_training` ส่ง `has_eval_dataset=False` + `eval_dataset=None` (ห้ามตั้ง strategy="steps" แล้วไม่ส่ง eval_dataset — transformers raise)
+- IPC: type ใหม่ `"val_metric"` → `{"type": "val_metric", "step", "epoch", "val_loss"}` — schema แยกเพราะ `validate_message` ของ `"metric"` เข้ม (บังคับครบ 4 key + numeric): `_REQUIRED_KEYS["val_metric"] = ("step", "epoch", "val_loss")` + type-check เฉพาะ 3 key
+- `StreamToQueueCallback.on_log` (**ขัด line158 เดิม**): log มี `eval_loss` → `queue.put(val_metric_msg(step, epoch, val_loss))` + return — ก่อน branch `"loss" not in logs` (เดิมหลุดเป็น log ดิบ)
+- `bf16`: `_xpu_bf16_supported()` ถาม `torch.xpu.is_bf16_supported()` จริง — raise/API หาย → `True` + `warnings.warn` (คงพฤติกรรมเดิม, ห้าม crash) · เดิม hardcode `bf16=True` ไม่เคยเช็คว่า autocast รันบน XPU จริง
+
+**Deferred (มีเหตุผล):**
+- training resume (`resume_from_checkpoint`) — feature ใหม่ไม่ใช่ correctness fix; abort ปัจจุบัน recover จาก adapter checkpoint (น้ำหนัก) แต่ optimizer/LR/step state เริ่มใหม่ → เปิดไว้ถ้าต้องการ run ยาวต่อเนื่อง

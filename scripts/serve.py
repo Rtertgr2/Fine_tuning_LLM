@@ -16,9 +16,9 @@ from pathlib import Path
 # รันเป็น `python scripts/serve.py` → sys.path[0] = scripts/ ต้องเพิ่ม root ก่อน
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core.compression import CompressionError
-from core.compression.config import artifact_path, resolve_source
-from core.compression.llama_runner import _log_tail, start_server, stop_server
+from core.compress import CompressionError
+from core.compress.config import artifact_path, resolve_source
+from core.compress.llama_runner import _log_tail, start_server, stop_server
 
 
 def build_parser() -> argparse.ArgumentParser:

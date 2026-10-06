@@ -38,11 +38,11 @@ def check_fim_tokens(tokenizer: AutoTokenizer) -> None:
     """FIM tokens ต้องเป็น token จริงใน vocab (ไม่ split/UNK) และ decode กลับได้"""
     for tok in FIM_TOKENS:
         tid = tokenizer.convert_tokens_to_ids(tok)
-        assert tid is not None and tid < len(tokenizer), f"{tok} ไม่อยู่ใน vocab: {tid}"
-        assert tokenizer.convert_ids_to_tokens(tid) == tok, f"{tok} ถูก split หรือเป็น UNK"
+        assert tid is not None and tid < len(tokenizer), f"{tok} not in vocab: {tid}"
+        assert tokenizer.convert_ids_to_tokens(tid) == tok, f"{tok} split or UNK"
         if tokenizer.unk_token_id is not None:
-            assert tid != tokenizer.unk_token_id, f"{tok} คืนค่า UNK"
-        assert tokenizer.decode(tid) == tok, f"{tok} decode ไม่ตรง"
+            assert tid != tokenizer.unk_token_id, f"{tok} returns UNK"
+        assert tokenizer.decode(tid) == tok, f"{tok} decode mismatch"
     ids = {t: tokenizer.convert_tokens_to_ids(t) for t in FIM_TOKENS}
     print(f"FIM tokens OK   : {ids}")
 
@@ -97,12 +97,12 @@ def main() -> int:
     assert trainer.state.global_step == 2, f"global_step={trainer.state.global_step} != 2"
     device = next(trainer.model.parameters()).device
     print(f"model device    : {device}")
-    assert str(device).startswith("xpu"), f"เทรนบน {device} ไม่ใช่ XPU"
+    assert str(device).startswith("xpu"), f"training on {device}, not XPU"
 
     # (7) loss ต้อง finite
     losses = [e["loss"] for e in trainer.state.log_history if "loss" in e]
-    assert losses, "ไม่มี loss ใน log_history"
-    assert all(math.isfinite(x) for x in losses), f"loss ไม่ finite: {losses}"
+    assert losses, "no loss in log_history"
+    assert all(math.isfinite(x) for x in losses), f"loss not finite: {losses}"
     print(f"losses (2 steps): {losses}")
     trainable = sum(p.numel() for p in trainer.model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in trainer.model.parameters())
