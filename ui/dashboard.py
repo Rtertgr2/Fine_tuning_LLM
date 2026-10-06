@@ -95,7 +95,16 @@ def _to_int(value, fallback: int) -> int:
 
 def _make_handlers(controller) -> dict:
     def on_check(*cfg_values):
-        config, user_params = _collect_config(*cfg_values)
+        try:
+            config, user_params = _collect_config(*cfg_values)
+        except ValueError as exc:
+            # model path จริงแต่นอก sandbox → raise ก่อนถึง preflight:
+            # โชว์ error (H2 escape) + verdict ไม่ผ่าน gate → Start ปิดอยู่
+            return (
+                f'<span style="color:#dc2626">**Error:** {html.escape(str(exc))}</span>',
+                "blocked",
+                gr.Button(interactive=False),
+            )
         result = controller.preflight(config, user_params)
         _label, color = verdict_style(result.verdict)
         breakdown = "\n".join(
@@ -123,7 +132,10 @@ def _make_handlers(controller) -> dict:
         )
 
     def on_start(*cfg_values):
-        config, _user_params = _collect_config(*cfg_values)
+        try:
+            config, _user_params = _collect_config(*cfg_values)
+        except ValueError as exc:  # model path นอก sandbox → error แทน raise ออกจาก handler
+            return f'<span style="color:#dc2626">**Error:** {html.escape(str(exc))}</span>'
         result = controller.start(config)
         if result == "started":
             return ""
@@ -142,7 +154,7 @@ def _make_handlers(controller) -> dict:
             f'**Status:** <span style="color:{color}">{snap.status.upper()}</span>'
         )
         fig = build_metric_plot(snap.metrics)
-        logs = "\n".join(snap.logs)  # Spec-5: live log ครบทุกบรรทัด (ไม่ตัด tail)
+        logs = "\n".join(snap.logs)  # snap.logs = LOG_TAIL_LINES บรรทัดล่าสุด + marker (ประวัติครบอยู่ที่ controller.logs)
         banners = []
         if snap.error:
             banners.append(
@@ -168,14 +180,26 @@ def _make_handlers(controller) -> dict:
 
     def on_predict(*values):
         *cfg_values, prefix, suffix = values
-        config, _user_params = _collect_config(*cfg_values)
+        try:
+            config, _user_params = _collect_config(*cfg_values)
+        except ValueError as exc:  # model path นอก sandbox → error แทน raise ออกจาก handler
+            return "", (
+                '<span style="color:#dc2626">'
+                f"**Predict failed:** {html.escape(str(exc))}</span>"
+            )
         try:
             return run_predict(config, prefix, suffix), ""
         except Exception as exc:  # noqa: BLE001 — แสดง error ทุกชนิดใน UI
             return "", f'<span style="color:#dc2626">**Predict failed:** {exc}</span>'
 
     def on_eval(*cfg_values):
-        config, _user_params = _collect_config(*cfg_values)
+        try:
+            config, _user_params = _collect_config(*cfg_values)
+        except ValueError as exc:  # model path นอก sandbox → error แทน raise ออกจาก handler
+            return None, (
+                '<span style="color:#dc2626">'
+                f"**Evaluation failed:** {html.escape(str(exc))}</span>"
+            )
         try:
             # sequential — base เสร็จค่อย finetuned (คนละ process, ห้าม stacking §5)
             base = controller.run_eval(config, "base")
@@ -213,7 +237,13 @@ def _make_handlers(controller) -> dict:
             return f'<span style="color:#dc2626">**Save failed:** {html.escape(str(exc))}</span>'
 
     def on_merge(*cfg_values):
-        config, _user_params = _collect_config(*cfg_values)
+        try:
+            config, _user_params = _collect_config(*cfg_values)
+        except ValueError as exc:  # model path นอก sandbox → error แทน raise ออกจาก handler
+            return (
+                '<span style="color:#dc2626">'
+                f"**Merge failed:** {html.escape(str(exc))}</span>"
+            )
         try:
             dest = merge_export(config)
             return f'<span style="color:#16a34a">✅ Merged weights saved → `{html.escape(str(dest))}`</span>'

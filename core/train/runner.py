@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import traceback
+import warnings
 from pathlib import Path
 
 import torch
@@ -52,7 +53,12 @@ def _has_adapter_files(ckpt: Path) -> bool:
 
 
 def _recover_interrupted_commit(root: Path) -> None:
-    """Sec-12: กู้ swap ที่ค้างกลางทาง (SIGKILL หลัง final→*.old) — เรียกก่อน scan ใน latest_checkpoint
+    """Sec-12: กู้ swap ที่ค้างกลางทาง (SIGKILL หลัง final→*.old) — `run_training` เรียกเสมอ
+    ก่อน `trainer.train` (ไม่ใช่แค่ตอน resume; จังหวะนั้นยังไม่มี writer active → rename ปลอดภัย)
+
+    ห้ามเรียกจาก `latest_checkpoint`: ผู้อ่านอย่าง export/predict/eval เรียกมันระหว่างเทรน
+    — rename/rmtree ตรง ๆ จะชนกับ `AtomicSaveTrainer` ที่กำลัง save/commit (race)
+    ผู้อ่านใช้ทางอื่น: `latest_checkpoint` เลือก artifact ที่สมบูรณ์ (.old / .saving ครบ) ได้โดยไม่กู้
 
     - base หาย + มี .old และ .saving → เอา .saving (new — `super()._save` เสร็จแล้วตอน commit เริ่ม)
     - base หาย + มีแค่ .old → คืน .old (checkpoint จริงที่ใช้ได้)
@@ -85,8 +91,9 @@ def commit_checkpoint(tmp_dir: Path, final_dir: Path) -> None:
 
     ถ้า final มีของเดิมอยู่ → เก็บออกไปเป็น *.old ก่อน แล้ว rename เข้าที่ แล้วล้าง *.old
     (ถ้าโดน abort กลาง save → เหลือแค่ *.saving รอบถัดไปไม่แตะ checkpoint จริง)
-    หมายเหตุ Sec-12: ถ้าโดน SIGKILL ระหว่าง 2 rename นี้ → resume path คืนผ่าน
-    `_recover_interrupted_commit` (เรียกใน latest_checkpoint) — sequence นี้ไม่แก้
+    หมายเหตุ Sec-12: ถ้าโดน SIGKILL ระหว่าง 2 rename นี้ → รอบถัดไปคืนผ่าน
+    `_recover_interrupted_commit` (run_training เรียกก่อน trainer.train เสมอ — ไม่ใช่
+    latest_checkpoint: ผู้อ่านฝั่ง export/predict/eval ต้องเรียกได้โดยไม่แตะ disk) — sequence นี้ไม่แก้
     หมายเหตุ (ตรงความจริงตาม source transformers): atomic ครอบเฉพาะ weights ที่เขียนผ่าน
     `_save` — optimizer/scheduler/trainer_state.json เขียนลง checkpoint dir ตรง ๆ ทีหลัง
     → adapter weights ปลอดภัยเสมอ แต่ resume อาจไม่ครบถ้าโดน kill กลางเขียน checkpoint
@@ -186,6 +193,9 @@ def run_training(config: dict, queue_) -> None:
             peft_config=lora,
             callbacks=[callback],
         )
+        # Sec-12: กู้ swap ค้างกลางทางเสมอ (ไม่ใช่แค่ตอน resume) — จังหวะนี้ยังไม่มี writer
+        # active (ก่อน trainer.train) → rename/rmtree ปลอดภัย แล้วค่อย scan หา checkpoint
+        _recover_interrupted_commit(Path(config["output_dir"]))
         # M8: resume flag → โหลด checkpoint ล่าสุดต่อ (ไม่มี checkpoint = fresh + log บอกชัด)
         resume: str | None = None
         if config.get("resume"):
@@ -219,29 +229,63 @@ def run_training(config: dict, queue_) -> None:
 def latest_checkpoint(output_dir: str | Path) -> Path:
     """หา `checkpoint-<n>` ที่เลขมากสุดใน output_dir (numeric เทียบ ไม่ใช่ lexical)
 
+    read-only: ไม่แก้ไขอะไรบน disk (export/predict/eval เรียกพร้อม training ที่กำลังเขียน
+    checkpoint — กู้ swap ค้างด้วย rename เป็นหน้าที่ `run_training` ไม่ใช่ที่นี่)
+    เลือก checkpoint ที่สมบูรณ์จาก swap artifact เมื่อ final หาย:
+    - `checkpoint-<n>.old` = ของเก่าที่สมบูรณ์เสมอ (final ถูก rename ทิ้งมาก่อน)
+    - `checkpoint-<n>.saving` = สมบูรณ์ก็ต่อเมื่อมี adapter files ครบ (เดียวกับ rule ของ `_recover_interrupted_commit`)
+    - final `checkpoint-<n>` ชนะ artifact ของ step เดียวกัน; ข้าม step → เลือก step มากสุด
+    - `.saving` ที่เขียนไม่ครบ = ยังไม่ไว้ใจ ไม่เลือก
+    มี artifact ค้าง → warn ให้ caller รู้ (training รอบถัดไปจะ rename ซ่อมให้)
     ไม่มี checkpoint ที่ถูกต้อง → raise ValueError (ผู้เรียกตัดสินใจเอง)
     """
     root = Path(output_dir)
-    _recover_interrupted_commit(root)  # Sec-12: กู้ swap ค้างกลางทางก่อน scan (resume path)
-    best: tuple[int, Path] | None = None
+    best_final: tuple[int, Path] | None = None
+    best_artifact: tuple[int, Path] | None = None
+    saw_artifact = False
     if root.is_dir():
         for child in root.iterdir():
-            if not (child.is_dir() and is_checkpoint_dir(child.name)):
+            if not child.is_dir():
                 continue
-            step_text = child.name.removeprefix("checkpoint-")
-            if not step_text.isdigit():
+            name, kind = child.name, "final"
+            if name.endswith(".old"):
+                name, kind = name[: -len(".old")], "old"
+            elif name.endswith(".saving"):
+                name, kind = name[: -len(".saving")], "saving"
+            if not is_checkpoint_dir(name):
                 continue
-            step = int(step_text)
-            if best is None or step > best[0]:
-                best = (step, child)
-    if best is None:
-        raise ValueError(f"no checkpoint found in {root}")
-    return best[1]
+            if kind != "final":
+                saw_artifact = True
+            if kind == "saving" and not _has_adapter_files(child):
+                continue  # partial `.saving` — เขียนไม่ครบ ยังไม่ไว้ใจ
+            step = int(name.removeprefix("checkpoint-"))
+            if kind == "final":
+                if best_final is None or step > best_final[0]:
+                    best_final = (step, child)
+            elif best_artifact is None or step > best_artifact[0]:
+                best_artifact = (step, child)
+    if saw_artifact:
+        warnings.warn(
+            f"interrupted checkpoint swap in {root} — leftover .old/.saving artifacts; "
+            "next training run repairs them",
+            stacklevel=2,
+        )
+    # final ชนะ artifact ของ step เดียวกัน; ข้าม step → step มากสุดตลอด
+    if best_final and (best_artifact is None or best_final[0] >= best_artifact[0]):
+        return best_final[1]
+    if best_artifact:
+        return best_artifact[1]
+    raise ValueError(f"no checkpoint found in {root}")
 
 
 def resume_checkpoint(output_dir: str | Path) -> str | None:
-    """M8: checkpoint ล่าสุดเป็น str สำหรับ `trainer.train(resume_from_checkpoint=...)` — ไม่มี → None"""
+    """M8: checkpoint ล่าสุดเป็น str สำหรับ `trainer.train(resume_from_checkpoint=...)` — ไม่มี → None
+
+    Sec-12: pure scan — ไม่กู้อะไรบน disk (กู้ swap ค้างเป็นหน้าที่ `_recover_interrupted_commit`
+    ที่ `run_training` เรียกก่อนหน้า เสมอ ไม่ใช่แค่ตอน resume)
+    """
+    root = Path(output_dir)
     try:
-        return str(latest_checkpoint(output_dir))
+        return str(latest_checkpoint(root))
     except ValueError:
         return None

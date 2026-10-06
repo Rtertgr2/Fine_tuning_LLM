@@ -2,6 +2,7 @@
 
 import dataclasses
 import json
+import random
 from types import SimpleNamespace
 
 import pytest
@@ -365,9 +366,11 @@ def test_run_eval_stamps_metric_kind_and_identity(monkeypatch, tmp_path):
     assert result["f1_kind"] == "lcs"
     assert result["dataset_id"] == cfg["dataset_id"]
     assert result["dataset_column"] == cfg["dataset_column"]
+    assert result["prompt_version"] == ev.PROMPT_VERSION  # prompt-construction version
     on_disk = json.loads((tmp_path / "base.json").read_text(encoding="utf-8"))
     assert on_disk["f1_kind"] == "lcs"                     # JSON ที่เขียนก็มี key ครบ
     assert on_disk["dataset_id"] == cfg["dataset_id"]
+    assert on_disk["prompt_version"] == ev.PROMPT_VERSION
 
 
 def test_run_eval_no_cases_raises(monkeypatch, tmp_path):
@@ -382,3 +385,39 @@ def test_run_eval_no_cases_raises(monkeypatch, tmp_path):
     monkeypatch.setattr(ev, "iter_codes", lambda *a, **k: [])
     with pytest.raises(ValueError, match="no eval cases"):
         ev.run_eval(_valid_config(), mode="base", eval_dir=tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Issue B: prefix ต้องตัดแบบ tail (บริบทติด middle) — ตรงกับ build_samples
+# ---------------------------------------------------------------------------
+
+
+def test_build_eval_cases_prefix_keeps_tail_suffix_keeps_head(monkeypatch):
+    # ทุกบรรทัด 30 คำ × 9 บรรทัด — max_seq_length=40 → budget 20/20 ตัดทั้งคู่จริง
+    # และ middle ≤ 7 บรรทัด = 210 คำ ≤ EVAL_MAX_NEW_TOKENS (256) → ห้ามโดน skip
+    def make(i: int) -> str:
+        return "".join(
+            " ".join(f"l{i}_{j}" for j in range(30)) + "\n" for j in range(9)
+        )
+
+    code = _heldout_variant(make)
+    monkeypatch.setattr(ev, "iter_codes", lambda *a, **k: [code])
+    # replicate rng ของ build_eval_cases: rng สร้างครั้งเดียว seed ด้วย SEED, ไม่ถูกใช้ก่อน split_fim
+    rng_prefix, rng_suffix, rng_middle = db.split_fim(code, random.Random(ev.SEED))
+
+    cases, skipped = ev.build_eval_cases(
+        dataset_id="x",
+        dataset_column="content",
+        limit=1,
+        tokenizer=FakeTok(),
+        n_cases=1,
+        max_seq_length=40,
+    )
+    assert len(cases) == 1
+    assert skipped == 0
+    case = cases[0]
+    assert case.middle == rng_middle
+    # prefix = tail: คำท้าย 20 ตัวของ prefix จริง (head-keep จะได้ 20 ตัวแรก → RED)
+    assert case.prefix.split() == rng_prefix.split()[-20:]
+    # suffix ยัง head-keep (คงพฤติกรรมเดิม)
+    assert case.suffix.split() == rng_suffix.split()[:20]

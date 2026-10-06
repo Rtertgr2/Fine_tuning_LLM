@@ -30,6 +30,7 @@ class FakeProcess:
         self.started = False
         self.terminate_calls = 0
         self.kill_calls = 0
+        self.join_calls: list = []
         self.target = None
         self.args = None
 
@@ -50,6 +51,7 @@ class FakeProcess:
             self.alive = False
 
     def join(self, timeout: float | None = None) -> None:
+        self.join_calls.append(timeout)
         return None
 
 
@@ -335,6 +337,54 @@ def test_zombie_tick_resets_status_and_unlocks_start():
     assert ctl.training_active is False    # Start ปลดล็อก (training_active = process and not terminal)
 
 
+ZOMBIE_MSG = "Training process died without sending finished/aborted (zombie)"
+
+
+def test_zombie_watchdog_failure_persists_in_later_ticks():
+    """watchdog พบ zombie โดยที่ child ไม่ได้ส่ง error มา → failure ต้องอยู่ต่อใน snapshot ถัดไป
+
+    เดิม message อยู่แค่ใน watchdog ของ snapshot แรก (~1 วิ) แล้วหาย — _error/_logs ไม่ถูกแตะ
+    """
+    fp = FakeProcess(alive=False)
+    ctl, _fp, state = make_controller(process=fp)
+    ctl.start(valid_config())
+    state["queue"].messages.extend([status_msg("training")])  # ไม่มี error_msg ค้าง
+
+    snap = ctl.tick()
+    assert snap.watchdog is not None and "zombie" in snap.watchdog
+    assert snap.error == ZOMBIE_MSG                      # เก็บเป็น error ด้วย
+    assert any("zombie" in line for line in snap.logs)   # message เข้า log
+    assert any("last_status=" in line for line in snap.logs)  # traceback เข้า log ด้วย
+    assert fp.join_calls == [0]  # dead child ถูก reap ก่อนทิ้ง reference
+
+    snap2 = ctl.tick()
+    assert snap2.watchdog is None  # ไม่ spam
+    assert snap2.error == ZOMBIE_MSG  # แต่ failure ยังแสดงอยู่
+    assert any("zombie" in line for line in snap2.logs)
+
+
+def test_tick_bounds_log_payload_but_keeps_full_history():
+    """ทุก tick ส่ง log ครบทั้งประวัติ → textbox ใหญ่ขึ้นเรื่อย ๆ ตลอด run
+
+    snapshot ต้องส่งเฉพาะ tail (bounded) + marker — ประวัติครบเก็บแยกใน controller
+    """
+    n = ui_controller.LOG_TAIL_LINES + 100
+    msgs = [log_msg("INFO", f"line {i}") for i in range(n)]
+    ctl, _fp, _state = make_controller(messages=msgs)
+
+    snap = ctl.tick()
+    assert len(snap.logs) == ui_controller.LOG_TAIL_LINES + 1  # +1 = marker
+    assert snap.logs[-1] == f"[INFO] line {n - 1}"  # newest อยู่ท้าย
+    assert "older lines not shown" in snap.logs[0]
+    assert not any(line.endswith("line 0]") for line in snap.logs)  # เก่าสุดถูกตัด
+    # ประวัติครบยังเข้าถึงได้จาก controller (แยกจาก payload ที่ส่ง)
+    assert ctl.logs == [f"[INFO] line {i}" for i in range(n)]
+
+    # tick ซ้ำ (queue ว่าง) → ยัง bounded คงเดิม ไม่ใช่ grow
+    snap2 = ctl.tick()
+    assert len(snap2.logs) == ui_controller.LOG_TAIL_LINES + 1
+
+
 def test_exit_terminates_child():
     fp = FakeProcess(alive=True, dies_on_terminate=False)
     ctl, _fp, _state = make_controller(process=fp)
@@ -431,9 +481,12 @@ def test_start_refused_while_training():
 
 def test_start_resets_previous_run_state():
     """I4: เริ่มรันใหม่ → metrics/logs/error ของรันก่อนถูกล้าง (plot ห้ามปนกัน)"""
+    # process ใหม่ต้อง alive — FakeProcess default ตาย → watchdog ของรันใหม่ fire ทันที
+    # (ถูกต้องหลัง fix watchdog persistence) แล้วปนกับการ assert ว่ารันก่อนถูกล้าง
     ctl, _fp, _state = make_controller(
         messages=[metric_msg(1, 9.9, 2e-4, 0.1), status_msg("finished"),
-                  error_msg("old run error", "tb")]
+                  error_msg("old run error", "tb")],
+        process=FakeProcess(alive=True),
     )
     snap = ctl.tick()
     assert snap.metrics and snap.error == "old run error"

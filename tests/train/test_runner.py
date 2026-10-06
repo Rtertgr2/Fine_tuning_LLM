@@ -75,34 +75,112 @@ def _mk_adapter_ckpt(path: Path, marker: str | None = None) -> None:
         (path / "marker").write_text(marker, encoding="utf-8")
 
 
-def test_latest_checkpoint_restores_old_after_interrupted_swap(tmp_path):
-    """Sec-12: SIGKILL หลัง final→*.old → resume ต้องกู้ .old กลับ (เดิม: checkpoint หายจากรัน เงียบ ๆ)"""
+def test_latest_checkpoint_selects_old_without_recovering(tmp_path):
+    """read-only contract: final หาย → คืน path ของ .old ตรง ๆ (ไม่ rename/rmtree) —
+    export/predict/eval เห็น checkpoint ที่ค้างกลางทางได้ (กู้ swap เป็นหน้าที่ run_training)"""
     root = tmp_path / "out"
     _mk_adapter_ckpt(root / "checkpoint-5.old")
-    assert wa.latest_checkpoint(root) == root / "checkpoint-5"
+    with pytest.warns(UserWarning, match="interrupted"):
+        assert wa.latest_checkpoint(root) == root / "checkpoint-5.old"
+    # ไม่แตะ disk — artifact อยู่ที่เดิมให้ training process กู้เอง
+    assert (root / "checkpoint-5.old").is_dir()
+    assert not (root / "checkpoint-5").exists()
+
+
+def test_latest_checkpoint_selects_complete_saving_artifact(tmp_path):
+    """.saving ที่มี adapter files ครบ (commit เริ่มแล้วแต่โดน kill) = checkpoint ใหม่ที่ใช้ได้ → เลือก ไม่ rename"""
+    root = tmp_path / "out"
+    _mk_adapter_ckpt(root / "checkpoint-6.saving", marker="new")
+    with pytest.warns(UserWarning, match="interrupted"):
+        assert wa.latest_checkpoint(root) == root / "checkpoint-6.saving"
+    assert (root / "checkpoint-6.saving").is_dir()
+    assert not (root / "checkpoint-6").exists()
+
+
+def test_latest_checkpoint_final_wins_over_artifact_same_step(tmp_path):
+    """final `checkpoint-<n>` ชนะ artifact ของ step เดียวกัน (ไม่ใช่ artifact ที่เพิ่ง swap ทิ้ง)"""
+    root = tmp_path / "out"
+    _mk_adapter_ckpt(root / "checkpoint-5.old", marker="old")
+    _mk_adapter_ckpt(root / "checkpoint-5")
+    with pytest.warns(UserWarning, match="interrupted"):
+        assert wa.latest_checkpoint(root) == root / "checkpoint-5"
+
+
+def test_latest_checkpoint_picks_highest_step_over_artifact(tmp_path):
+    """ข้าม step → เลือกมากสุดตลอด (`.old` ของ step ที่มากกว่า final ที่น้อยกว่า ชนะ)"""
+    root = tmp_path / "out"
+    (root / "checkpoint-5").mkdir(parents=True)
+    _mk_adapter_ckpt(root / "checkpoint-6.old")
+    with pytest.warns(UserWarning, match="interrupted"):
+        assert wa.latest_checkpoint(root) == root / "checkpoint-6.old"
+
+
+def test_latest_checkpoint_does_not_trust_partial_saving(tmp_path):
+    """.saving ไม่มี adapter files (เขียนไม่ครบ) → ยังไม่ complete → ไม่เลือก"""
+    root = tmp_path / "out"
+    saving = root / "checkpoint-7.saving"
+    saving.mkdir(parents=True)
+    (saving / "trainer_state.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError, match="no checkpoint found"):
+        wa.latest_checkpoint(root)
+    assert saving.is_dir()  # ไม่แตะ .saving ที่เขียนไม่ครบ
+
+
+def test_latest_checkpoint_has_no_side_effects(tmp_path):
+    """Sec-12: .old/.saving ห้ามถูก rename/rmtree ระหว่าง scan — คิวให้ run_training (ก่อน trainer.train) ทำคนเดียว"""
+    root = tmp_path / "out"
+    _mk_adapter_ckpt(root / "checkpoint-5.old", marker="old")
+    _mk_adapter_ckpt(root / "checkpoint-6.saving", marker="new")
+    (root / "checkpoint-10").mkdir(parents=True)
+    assert wa.latest_checkpoint(root) == root / "checkpoint-10"
+    # artifacts ต้องอยู่ที่เดิมเป๊ะ (นี่คือสิ่งที่ training process กำลังเขียนอยู่)
+    assert (root / "checkpoint-5.old").is_dir()
+    assert (root / "checkpoint-5.old" / "marker").read_text(encoding="utf-8") == "old"
+    assert (root / "checkpoint-6.saving").is_dir()
+    assert not (root / "checkpoint-5").exists()
+    assert not (root / "checkpoint-6").exists()
+
+
+def test_recover_interrupted_commit_restores_old(tmp_path):
+    """Sec-12: SIGKILL หลัง final→*.old → `_recover_interrupted_commit` (run_training เรียก
+    เสมอก่อน trainer.train) ต้อง rename .old กลับ — เดิม: checkpoint หายจากรัน เงียบ ๆ"""
+    root = tmp_path / "out"
+    _mk_adapter_ckpt(root / "checkpoint-5.old")
+    wa._recover_interrupted_commit(root)
+    assert (root / "checkpoint-5").is_dir()
     assert not (root / "checkpoint-5.old").exists()
 
 
-def test_latest_checkpoint_prefers_saving_over_old(tmp_path):
+def test_recover_interrupted_commit_prefers_saving_over_old(tmp_path):
     """Sec-12: มีทั้ง .old (เก่า) และ .saving (ใหม่ — super()._save เสร็จแล้วตอน commit เริ่ม) → ต้องเอา .saving"""
     root = tmp_path / "out"
     _mk_adapter_ckpt(root / "checkpoint-5.old", marker="old")
     _mk_adapter_ckpt(root / "checkpoint-5.saving", marker="new")
-    restored = wa.latest_checkpoint(root)
-    assert restored == root / "checkpoint-5"
-    assert (restored / "marker").read_text(encoding="utf-8") == "new"
+    wa._recover_interrupted_commit(root)
+    assert (root / "checkpoint-5" / "marker").read_text(encoding="utf-8") == "new"
     assert not (root / "checkpoint-5.old").exists()
     assert not (root / "checkpoint-5.saving").exists()
 
 
-def test_latest_checkpoint_does_not_trust_partial_saving(tmp_path):
+def test_recover_interrupted_commit_ignores_partial_saving(tmp_path):
     """Sec-12: .saving ที่ไม่มี adapter files (first save โดน kill กลางเขียน) — ห้ามกู้ (อาจ partial)"""
     root = tmp_path / "out"
     saving = root / "checkpoint-7.saving"
     saving.mkdir(parents=True)
     (saving / "trainer_state.json").write_text("{}", encoding="utf-8")
-    with pytest.raises(ValueError, match="no checkpoint found"):   # ข้อความ raise เดิม (:479)
-        wa.latest_checkpoint(root)
+    wa._recover_interrupted_commit(root)
+    assert saving.is_dir()  # ไม่แตะ .saving ที่เขียนไม่ครบ
+    assert not (root / "checkpoint-7").exists()
+
+
+def test_resume_checkpoint_is_pure_scan(tmp_path):
+    """M8/Sec-12: resume ไม่กู้อะไร — scan อย่างเดียว (กู้ swap เป็นหน้าที่ run_training ก่อนหน้า)"""
+    root = tmp_path / "out"
+    _mk_adapter_ckpt(root / "checkpoint-5.old")
+    with pytest.warns(UserWarning, match="interrupted"):
+        assert wa.resume_checkpoint(root) == str(root / "checkpoint-5.old")
+    assert (root / "checkpoint-5.old").is_dir()  # ไม่ rename
+    assert not (root / "checkpoint-5").exists()
 
 
 def _stub_training_env(
@@ -257,6 +335,35 @@ def test_run_training_without_resume_flag_passes_none(monkeypatch, tmp_path):
     assert calls == [None]
     logs = [m["text"] for m in q.messages if m["type"] == "log"]
     assert not any("resuming" in t for t in logs)
+
+
+# ---------------------------------------------------------------------------
+# Sec-12: กู้ swap ค้างกลางทาง = หน้าที่ run_training เสมอ (ไม่ใช่แค่ตอน resume)
+# ---------------------------------------------------------------------------
+
+
+def test_run_training_recovers_interrupted_swap_without_resume_flag(monkeypatch, tmp_path):
+    """Sec-12: `_recover_interrupted_commit` ถูกเรียกโดยไม่ขึ้นกับ resume flag —
+    resume=False ก็ต้อง rename .old กลับก่อน trainer.train (ค้างไว้ = checkpoint หายจากรัน)"""
+    _stub_training_env(monkeypatch, codes=["train_dummy"])
+    _mk_adapter_ckpt(tmp_path / "checkpoint-5.old")
+    q = FakeQueue()
+    wa.run_training(_resume_cfg(str(tmp_path), resume=False), q)
+    assert (tmp_path / "checkpoint-5").is_dir()
+    assert not (tmp_path / "checkpoint-5.old").exists()
+    assert q.messages[-1] == {"type": "status", "state": "finished"}
+
+
+def test_run_training_repairs_swap_before_resume_scan(monkeypatch, tmp_path):
+    """กู้ก่อน scan: resume=True + artifact ค้าง → trainer.train ต้องได้ path จริง
+    (ไม่ใช่ path ของ .old ที่ resume scan เจอแบบไม่กู้)"""
+    calls: list = []
+    _stub_training_env(monkeypatch, codes=["train_dummy"], train_calls=calls)
+    _mk_adapter_ckpt(tmp_path / "checkpoint-5.old")
+    q = FakeQueue()
+    wa.run_training(_resume_cfg(str(tmp_path)), q)
+    assert calls == [str(tmp_path / "checkpoint-5")]
+    assert not (tmp_path / "checkpoint-5.old").exists()
 
 
 # ---------------------------------------------------------------------------

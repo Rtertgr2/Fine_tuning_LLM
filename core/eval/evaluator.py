@@ -31,6 +31,10 @@ from core.data.dataset_builder import (
 
 EVAL_MAX_NEW_TOKENS: int = 256
 
+# เวอร์ชันการสร้าง prompt (เช่น FIM prefix ตัด tail) — รายงานต้องมีค่าเท่ากับค่านี้
+# ถึงจะเทียบกันได้ (`check_comparable`) — เปลี่ยนวิธีสร้าง prompt = bump ค่านี้
+PROMPT_VERSION: int = 1
+
 
 @dataclass(frozen=True)
 class EvalCase:
@@ -109,8 +113,12 @@ def build_eval_cases(
         if len(tokenizer.encode(middle, add_special_tokens=False)) > EVAL_MAX_NEW_TOKENS:
             skipped += 1
             continue
+        # suffix ตัด head (คงเดิม), prefix ตัด tail — เก็บบริบทถัดจาก middle
+        # ตรง build_samples (train/eval ต้องหด prefix แบบเดียวกัน)
         suffix = truncate_to_tokens(suffix, tokenizer, max_seq_length // 2)
-        prefix = truncate_to_tokens(prefix, tokenizer, max_seq_length - max_seq_length // 2)
+        prefix = truncate_to_tokens(
+            prefix, tokenizer, max_seq_length - max_seq_length // 2, keep="tail"
+        )
         cases.append(EvalCase(prefix=prefix, suffix=suffix, middle=middle))
         if len(cases) >= n_cases:
             break
@@ -128,23 +136,19 @@ def evaluate_cases(
 ) -> dict:
     """generate middle ต่อ case แบบ greedy → คำนวณ Exact Match + Token F1"""
     # lazy import: --compare ห้ามดึง torch/transformers (D10)
-    from core.data.fim import build_fim_prompt
+    from core.data.fim import build_fim_prompt, decode_continuation, encode_prompt
 
     per_case: list[dict] = []
     total = len(cases)
-    # P0 D1: marker (id ของ fim_tokens) ไม่ใช่ special token → decode ปล่อยออกมา → กรองเอง
-    fim_ids = {tokenizer.convert_tokens_to_ids(t) for t in fim_tokens.values()}
     for i, case in enumerate(cases):
         prompt = build_fim_prompt(case.prefix, case.suffix, fim_tokens=fim_tokens)
-        # P1 D2: ตรงฝั่งเทรน (packing ไม่เติม special) — BOS ฝั่งเดียว = prompt บวม
-        inputs = tokenizer(prompt, return_tensors="pt", add_special_tokens=False)
+        inputs = encode_prompt(tokenizer, prompt)
         inputs = {k: v.to(device) for k, v in inputs.items()}
         output_ids = model.generate(
             **inputs, max_new_tokens=EVAL_MAX_NEW_TOKENS, do_sample=False
         )
         continuation = output_ids[0][inputs["input_ids"].shape[1] :]
-        kept = [int(t) for t in continuation.tolist() if int(t) not in fim_ids]
-        pred = tokenizer.decode(kept, skip_special_tokens=True)
+        pred = decode_continuation(tokenizer, continuation, fim_tokens=fim_tokens)
         per_case.append(
             {
                 "i": i,
@@ -250,6 +254,9 @@ def run_eval(
         "f1_kind": F1_KIND,
         "dataset_id": config["dataset_id"],
         "dataset_column": config["dataset_column"],
+        # prompt-construction version — รายงานก่อนเปลี่ยน prompt (เช่น FIM prefix tail)
+        # ไม่มี key นี้ → check_comparable reject (เทียบคนละ prompt ไม่ได้)
+        "prompt_version": PROMPT_VERSION,
     }
     if len(cases) < n_cases:
         result["warning"] = (
@@ -263,12 +270,53 @@ def run_eval(
     return result
 
 
+def check_comparable(base: dict, finetuned: dict) -> None:
+    """identity gate ร่วมของ CLI (`eval.py --compare`) และ UI (dashboard compare) — ไม่ตรง → raise
+
+    - `f1_kind` ของ **ทั้งสองรายงาน** ต้องเท่ากับ `F1_KIND` ปัจจุบัน — legacy ไม่มี key
+      (None == None) เดิมผ่าน check แบบเทียบสองรายงานด้วยกัน → ต้อง reject (คนละ build = คนละความหมาย)
+    - `prompt_version` ของทั้งสองต้องเท่ากับ `PROMPT_VERSION` ปัจจุบัน — รายงานก่อน/หลัง
+      เปลี่ยนวิธีสร้าง prompt (เช่น FIM prefix tail) คนละเงื่อนไข → delta โกหก
+    - `(dataset_id, dataset_column)` ต้องตรงกัน — คนละชุดข้อมูล = delta โกหก
+    ข้อความคงแบบเดิมที่ CLI เคยพิมพ์ (test แชร์ assertion ไว้)
+    """
+    if base.get("f1_kind") != F1_KIND or finetuned.get("f1_kind") != F1_KIND:
+        raise ValueError(
+            f"Cannot compare: metric semantics differ (base f1_kind={base.get('f1_kind')!r} "
+            f"vs finetuned f1_kind={finetuned.get('f1_kind')!r}) — "
+            "rerun both modes with the current build"
+        )
+    if (
+        base.get("prompt_version") != PROMPT_VERSION
+        or finetuned.get("prompt_version") != PROMPT_VERSION
+    ):
+        raise ValueError(
+            f"Cannot compare: prompt construction differs "
+            f"(base prompt_version={base.get('prompt_version')!r} "
+            f"vs finetuned prompt_version={finetuned.get('prompt_version')!r}, "
+            f"current={PROMPT_VERSION}) — rerun both modes with the current build"
+        )
+    if (base.get("dataset_id"), base.get("dataset_column")) != (
+        finetuned.get("dataset_id"),
+        finetuned.get("dataset_column"),
+    ):
+        raise ValueError(
+            "Cannot compare: eval sets come from different datasets "
+            f"(base {base.get('dataset_id')!r}/{base.get('dataset_column')!r} vs "
+            f"finetuned {finetuned.get('dataset_id')!r}/{finetuned.get('dataset_column')!r}) — "
+            "rerun both modes on the same dataset"
+        )
+
+
 def compare_results(base: dict, finetuned: dict) -> tuple[list[list[str]], list[dict]]:
     """เปรียบเทียบ 2 JSON → (table rows, ตัวอย่าง base ผิด → fine ถูก up to 5)
 
     rows: [label, base, finetuned, delta] — EM ทศนิยม 1, F1 ทศนิยม 2
     qualitative: จับคู่ per_case ด้วย "i" — base exact=False และ finetuned exact=True
+    identity gate: f1_kind/dataset ไม่ผ่าน `check_comparable` → raise (CLI จับเป็น rc 2,
+    dashboard จับเป็น error banner — UI ห้าม render ผลที่เทียบไม่ได้เหมือน CLI)
     """
+    check_comparable(base, finetuned)
     b_em, f_em = base["exact_match_pct"], finetuned["exact_match_pct"]
     b_f1, f_f1 = base["token_f1_mean"], finetuned["token_f1_mean"]
     rows = [

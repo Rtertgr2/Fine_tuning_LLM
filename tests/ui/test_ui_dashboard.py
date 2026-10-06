@@ -5,6 +5,7 @@ from __future__ import annotations
 import gradio as gr
 
 from configs.safe_defaults import MAX_SEQ_LENGTH_CAP, MAX_SEQ_LENGTH_DEFAULT
+from core.eval.evaluator import PROMPT_VERSION
 from ui.dashboard import build_dashboard
 
 
@@ -136,6 +137,11 @@ class EvalController:
                 }
             ],
             "samples": [],
+            # identity markers ตรงกับ run_eval จริง — compare_results (check_comparable) ใช้
+            "f1_kind": "lcs",
+            "dataset_id": "a/ds",
+            "dataset_column": "content",
+            "prompt_version": PROMPT_VERSION,
         }
 
     # methods ที่ build_dashboard ไม่เรียกตอนสร้าง แต่ใส่ครบตาม duck-type เดิม
@@ -184,6 +190,27 @@ def test_on_eval_error_returns_english_message():
     assert "**Evaluation failed:**" in err
     assert "base exploded" in err
     assert err.endswith("</span>")
+
+
+def test_on_eval_rejects_reports_missing_f1_kind():
+    """identity checks (f1_kind/dataset) เดิมมีแค่ใน CLI — UI compare ต้อง reject ด้วย
+
+    legacy รายงานไม่มี f1_kind → compare_results ต้อง raise → handler โชว์ error banner
+    แทน render ผลที่เทียบไม่ได้
+    """
+
+    class LegacyEvalController(EvalController):
+        def run_eval(self, config, mode, **kw):
+            result = super().run_eval(config, mode, **kw)
+            result.pop("f1_kind", None)  # build เก่า = ไม่มี identity marker
+            return result
+
+    from ui.dashboard import _make_handlers
+
+    rows, err = _make_handlers(LegacyEvalController())["on_eval"](*_cfg_args())
+    assert rows is None
+    assert "**Evaluation failed:**" in err
+    assert "metric semantics differ" in err
 
 
 def test_build_dashboard_has_eval_widgets():
@@ -274,6 +301,11 @@ def _write_eval_json(dirpath, mode, em, f1, n=3):
                 "token_f1_mean": f1,
                 "per_case": [],
                 "samples": [],
+                # identity markers ตรงกับไฟล์ที่ run_eval เขียนจริง
+                "f1_kind": "lcs",
+                "dataset_id": "a/ds",
+                "dataset_column": "content",
+                "prompt_version": PROMPT_VERSION,
             }
         ),
         encoding="utf-8",
@@ -556,3 +588,77 @@ def test_on_check_reason_escapes_html():
     assert "<img" not in md
     assert "&lt;img" in md
     assert verdict == "OK"
+
+
+# ---------------------------------------------------------------------------
+# model path จริงแต่อยู่นอก sandbox → _collect_config raise ValueError
+# ก่อนที่ handler จะถึง controller — ต้องโชว์ error แทนที่จะ raise ออกจาก handler
+# ---------------------------------------------------------------------------
+
+
+def _outside_model_args(tmp_path):
+    """ค่า cfg ที่ชี้โมเดลเป็น path จริงอยู่นอก repo/models/ → resolve_local_model raise
+
+    ชื่อโฟลเดอร์ฝัง `<b>` เพื่อพิสูจน์ว่า error message ถูก escape (H2)
+    """
+    outside = tmp_path / "outside<b>model"
+    outside.mkdir()
+    args = list(_cfg_args())
+    args[0] = str(outside)
+    return args
+
+
+def test_on_check_outside_model_path_error_keeps_start_disabled(tmp_path):
+    """ค่า outside sandbox → on_check คืน error md + verdict ไม่ผ่าน gate + Start ปิด"""
+    from ui.dashboard import _make_handlers
+
+    md, verdict, btn = _make_handlers(_CheckCtl())["on_check"](
+        *_outside_model_args(tmp_path)
+    )
+    assert "**Error:**" in md
+    assert "<b>" not in md and "&lt;b&gt;" in md  # escape (H2)
+    assert verdict not in ("safe", "warning")  # on_tick ไม่ปลดล็อก Start
+    assert isinstance(btn, gr.Button) and btn.interactive is False
+
+
+def test_on_start_outside_model_path_returns_escaped_error(tmp_path):
+    """on_start: _collect_config raise → คืน error span เดิม ไม่ใช่ raise ออกจาก handler"""
+    from ui.dashboard import _make_handlers
+
+    out = _make_handlers(_StartCtl("unused"))["on_start"](
+        *_outside_model_args(tmp_path)
+    )
+    assert "**Error:**" in out
+    assert "<b>" not in out and "&lt;b&gt;" in out
+
+
+def test_on_predict_outside_model_path_returns_escaped_error(tmp_path):
+    from ui.dashboard import _make_handlers
+
+    out, err = _make_handlers(_StartCtl("unused"))["on_predict"](
+        *_outside_model_args(tmp_path), "pre", "suf"
+    )
+    assert out == ""
+    assert "**Predict failed:**" in err
+    assert "<b>" not in err and "&lt;b&gt;" in err
+
+
+def test_on_eval_outside_model_path_returns_escaped_error(tmp_path):
+    from ui.dashboard import _make_handlers
+
+    rows, err = _make_handlers(EvalController())["on_eval"](
+        *_outside_model_args(tmp_path)
+    )
+    assert rows is None
+    assert "**Evaluation failed:**" in err
+    assert "<b>" not in err and "&lt;b&gt;" in err
+
+
+def test_on_merge_outside_model_path_returns_escaped_error(tmp_path):
+    from ui.dashboard import _make_handlers
+
+    out = _make_handlers(_StartCtl("unused"))["on_merge"](
+        *_outside_model_args(tmp_path)
+    )
+    assert "**Merge failed:**" in out
+    assert "<b>" not in out and "&lt;b&gt;" in out

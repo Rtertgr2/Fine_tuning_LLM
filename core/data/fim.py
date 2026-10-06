@@ -1,4 +1,5 @@
 """FIM helpers — ensure_fim_tokens (vocab guard) + build_fim_prompt (PSM)
++ encode_prompt/decode_continuation (predict/eval ใช้ร่วมกัน — P1 D2 + P0 D1)
 แยกจาก trainer_worker.py เดิม (Approach B split)
 """
 
@@ -42,3 +43,25 @@ def build_fim_prompt(prefix: str, suffix: str, *, fim_tokens: dict) -> str:
         f"{fim_tokens['suffix']}{suffix}"
         f"{fim_tokens['middle']}"
     )
+
+
+def encode_prompt(tokenizer, prompt: str) -> dict:
+    """encode prompt แบบไม่เติม special token — ใช้ร่วม evaluate_cases + predict_middle
+
+    P1 D2: ตรงฝั่งเทรน (packing ไม่เติม special) — BOS ฝั่งเดียว = prompt บวม ≠ ฝั่ง eval
+    """
+    return tokenizer(prompt, return_tensors="pt", add_special_tokens=False)
+
+
+def decode_continuation(tokenizer, continuation, *, fim_tokens: dict) -> str:
+    """กรอง FIM marker id ออกจาก continuation แล้ว decode — ใช้ร่วม evaluate_cases + predict_middle
+
+    P0 D1: marker (id ของ fim_tokens) ไม่ใช่ special token → decode ปล่อยออกมา → กรองเอง
+    `continuation` = ids ต่อท้าย input (iterable ของ int หรือ tensor 1 มิติ)
+    """
+    fim_ids = {tokenizer.convert_tokens_to_ids(t) for t in fim_tokens.values()}
+    # tensor element ทีละตัว (iterate/int บน device) = sync ทุก token → ดึงลง CPU เป็น list ครั้งเดียว
+    if hasattr(continuation, "tolist"):
+        continuation = continuation.tolist()
+    kept = [int(t) for t in continuation if int(t) not in fim_ids]
+    return tokenizer.decode(kept, skip_special_tokens=True)

@@ -501,3 +501,111 @@ def test_iter_codes_outside_existing_path_never_hits_hub(monkeypatch, tmp_path):
 
     with pytest.raises(ValueError, match="outside"):
         db.iter_codes(str(outside), "content", limit=5)
+
+
+# ---------------------------------------------------------------------------
+# truncate_to_tokens: keep="head"|"tail" — prefix ต้องเก็บ tail (บริบทติด middle)
+# ---------------------------------------------------------------------------
+
+
+class _WordTok:
+    """word-level fake สำหรับ truncate — ไม่พึ่ง transformers"""
+
+    def __init__(self) -> None:
+        self.vocab: dict[str, int] = {}
+
+    def encode(self, text: str, *, add_special_tokens: bool = False) -> list[int]:
+        out: list[int] = []
+        for word in text.split():
+            if word not in self.vocab:
+                self.vocab[word] = len(self.vocab)
+            out.append(self.vocab[word])
+        return out
+
+    def decode(self, ids, **kwargs) -> str:
+        inv = {v: k for k, v in self.vocab.items()}
+        return " ".join(inv[int(i)] for i in ids)
+
+
+def test_truncate_to_tokens_head_default_unchanged():
+    tok = _WordTok()
+    text = "a b c d e"
+    assert db.truncate_to_tokens(text, tok, 3) == "a b c"  # default = head (เดิมเป๊ะ)
+    assert db.truncate_to_tokens(text, tok, 3, keep="head") == "a b c"
+
+
+def test_truncate_to_tokens_tail_keeps_end():
+    # Issue B: head-keep กับ prefix = โยนทิ้ง context ที่อยู่ติดกับ middle
+    tok = _WordTok()
+    text = "a b c d e"
+    assert db.truncate_to_tokens(text, tok, 3, keep="tail") == "c d e"
+
+
+def test_truncate_to_tokens_zero_budget_is_empty():
+    tok = _WordTok()
+    text = "a b c"
+    assert db.truncate_to_tokens(text, tok, 0) == ""
+    # 陷阱: ids[-0:] คืนทั้ง list → tail ต้องเคาะ 0 เอง ไม่ใช่ slice ตรง ๆ
+    assert db.truncate_to_tokens(text, tok, 0, keep="tail") == ""
+
+
+def test_truncate_to_tokens_fits_returns_original():
+    tok = _WordTok()
+    text = "a b"
+    assert db.truncate_to_tokens(text, tok, 5) == text
+    assert db.truncate_to_tokens(text, tok, 5, keep="tail") == text
+    assert db.truncate_to_tokens(text, tok, 2) == text  # == ก็ไม่ตัดทั้งสองฝั่ง
+
+
+def test_truncate_to_tokens_rejects_bad_keep():
+    tok = _WordTok()
+    with pytest.raises(ValueError, match="keep"):
+        db.truncate_to_tokens("a b", tok, 1, keep="tails")
+
+
+def test_build_samples_prefix_keeps_tail_next_to_middle():
+    # Issue B: prefix ของ FIM sample ต้องตัดแบบ tail — บรรทัดสุดท้าย (ติด middle) ต้องอยู่
+    tokenizer = _qwen_tokenizer()
+    long_code = (
+        "\n".join(
+            " ".join(f"v{i}_{j} = compute({i}, {j})" for j in range(20))
+            for i in range(12)
+        )
+        + "\n"
+    )
+    prefix, suffix, middle = _expected_fim_parts(long_code, 42, 1.0)
+    eos_len = len(tokenizer.encode(EOS, add_special_tokens=False))
+    overhead = sum(
+        len(tokenizer.encode(t, add_special_tokens=False)) for t in QWEN.values()
+    )
+    middle_len = len(tokenizer.encode(middle, add_special_tokens=False))
+    # ตั้ง budget ให้ middle+overhead พอดี เหลือ 32 ให้ prefix/suffix แย่ง —
+    # ทุกส่วนยาวกว่า budget แน่ (1 บรรทัด ≈ 160 tokens) → โดนตัดจริงทั้งคู่
+    max_seq_length = eos_len + overhead + middle_len + 32
+    outputs = list(
+        db.build_samples(
+            [long_code],
+            fim_tokens=QWEN,
+            eos=EOS,
+            fim_rate=1.0,
+            seed=42,
+            tokenizer=tokenizer,
+            max_seq_length=max_seq_length,
+        )
+    )
+    assert len(outputs) == 1  # middle_len + overhead ≤ budget โดย construction → ห้าม drop
+    body = outputs[0][: -len(EOS)]
+    got_prefix = body.split(QWEN["prefix"], 1)[1].split(QWEN["suffix"], 1)[0]
+    got_suffix = body.split(QWEN["suffix"], 1)[1].split(QWEN["middle"], 1)[0]
+    got_middle = body.split(QWEN["middle"], 1)[1]
+    assert got_middle == middle, "middle ต้องมาครบทุกอักขระ"
+    # prefix = tail: ต้องเป็น "ท้าย" ของ prefix จริงตัวอักษรเป๊ะ — head-keep จะได้หัวแทน (RED)
+    assert got_prefix != prefix  # โดนตัดจริง (ทุกส่วนยาวกว่า budget)
+    assert prefix.endswith(got_prefix)
+    assert not prefix.startswith(got_prefix)  # ห้ามเป็นหัว (กัน periodic collision)
+    # suffix ยัง head-keep (คงพฤติกรรมเดิม)
+    assert got_suffix != suffix
+    assert suffix.startswith(got_suffix)
+    assert not suffix.endswith(got_suffix)
+    n_tokens = len(tokenizer.encode(outputs[0], add_special_tokens=False))
+    assert n_tokens <= max_seq_length, f"{n_tokens} tokens"

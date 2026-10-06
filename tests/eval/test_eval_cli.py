@@ -3,11 +3,13 @@
 import json
 from pathlib import Path
 
+from configs.safe_defaults import F1_KIND
 from core.eval import evaluator as ev
 from eval import main as cli_main
 
 
 def _result(mode: str, *, em: float, f1: float, n: int = 3, per_case=None) -> dict:
+    """รายงาน eval ตาม build ปัจจุบัน — มี identity markers ครบ (f1_kind + dataset + prompt_version)"""
     return {
         "mode": mode,
         "n": n,
@@ -15,7 +17,19 @@ def _result(mode: str, *, em: float, f1: float, n: int = 3, per_case=None) -> di
         "token_f1_mean": f1,
         "per_case": per_case if per_case is not None else [],
         "samples": [],
+        "f1_kind": F1_KIND,
+        "dataset_id": "a/ds",
+        "dataset_column": "content",
+        "prompt_version": ev.PROMPT_VERSION,
     }
+
+
+def _legacy(result: dict) -> dict:
+    """รายงาน build เก่า — ไม่มี f1_kind/prompt_version (identity markers ถูกเพิ่มทีหลัง)"""
+    out = dict(result)
+    out.pop("f1_kind", None)
+    out.pop("prompt_version", None)
+    return out
 
 
 def _write_two(tmp_path: Path, base: dict, finetuned: dict) -> str:
@@ -60,8 +74,8 @@ def test_import_eval_and_evaluator_do_not_load_torch():
 
 def test_compare_rejects_f1_kind_mismatch(tmp_path, capsys):
     """review#5: ต่าง f1_kind → ห้ามเทียบ (คนละความหมายของ metric)"""
-    base = {**_result("base", em=5.0, f1=0.2), "f1_kind": "lcs"}
-    fine = _result("finetuned", em=6.0, f1=0.25)          # legacy = ไม่มี key
+    base = _result("base", em=5.0, f1=0.2)
+    fine = _legacy(_result("finetuned", em=6.0, f1=0.25))  # legacy = ไม่มี key
     eval_dir = _write_two(tmp_path, base, fine)
     assert cli_main(["--compare", "--eval-dir", eval_dir]) == 2
     assert "metric semantics differ" in capsys.readouterr().err
@@ -75,6 +89,31 @@ def test_compare_rejects_dataset_mismatch(tmp_path, capsys):
     eval_dir = _write_two(tmp_path, base, fine)
     assert cli_main(["--compare", "--eval-dir", eval_dir]) == 2
     assert "different datasets" in capsys.readouterr().err
+
+
+def test_compare_rejects_both_reports_missing_f1_kind(tmp_path, capsys):
+    """legacy reports ทั้งคู่ไม่มี f1_kind → None == None ผ่าน identity check เดิม (ต้อง reject)
+
+    f1_kind ต้องเทียบกับ F1_KIND ปัจจุบัน — ไม่ใช่แค่เทียบสองรายงานด้วยกัน
+    """
+    base = _legacy(_result("base", em=5.0, f1=0.2))      # legacy = ไม่มี key ทั้งคู่
+    fine = _legacy(_result("finetuned", em=6.0, f1=0.25))
+    eval_dir = _write_two(tmp_path, base, fine)
+    assert cli_main(["--compare", "--eval-dir", eval_dir]) == 2
+    assert "metric semantics differ" in capsys.readouterr().err
+
+
+def test_compare_rejects_mixed_prompt_versions(tmp_path, capsys):
+    """รายงาน build ก่อน/หลังเปลี่ยน prompt construction (FIM prefix tail) เทียบกันไม่ได้
+
+    base = build ปัจจุบัน (มี prompt_version), fine = build เก่า (ไม่มี marker) → ต้อง reject
+    """
+    base = _result("base", em=5.0, f1=0.2)
+    fine = _result("finetuned", em=6.0, f1=0.25)
+    fine.pop("prompt_version", None)
+    eval_dir = _write_two(tmp_path, base, fine)
+    assert cli_main(["--compare", "--eval-dir", eval_dir]) == 2
+    assert "prompt construction" in capsys.readouterr().err
 
 
 def test_compare_fail_on_tie(tmp_path, capsys):

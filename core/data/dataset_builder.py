@@ -61,11 +61,24 @@ def format_psm(
     )
 
 
-def truncate_to_tokens(text: str, tokenizer: Any, max_tokens: int) -> str:
-    """ตัดข้อความไม่ให้เกิน max_tokens (นับด้วย tokenizer จริง)"""
+def truncate_to_tokens(
+    text: str, tokenizer: Any, max_tokens: int, *, keep: str = "head"
+) -> str:
+    """ตัดข้อความไม่ให้เกิน max_tokens (นับด้วย tokenizer จริง)
+
+    `keep="head"` (default): ทิ้งท้าย — suffix / plain LM, `keep="tail"`: ทิ้งหัว — prefix
+    (เก็บบริบทถัดจาก middle; head-keep กับ prefix = โยนทิ้ง context ที่ model ใช้เดา middle)
+    `max_tokens <= 0` → "" เสมอ (ระวัง `ids[-0:]` = คืนทั้ง list)
+    """
+    if keep not in ("head", "tail"):
+        raise ValueError(f'keep must be "head" or "tail", got {keep!r}')
+    if max_tokens <= 0:
+        return ""
     ids = tokenizer.encode(text, add_special_tokens=False)
     if len(ids) <= max_tokens:
         return text
+    if keep == "tail":
+        return tokenizer.decode(ids[-max_tokens:])
     return tokenizer.decode(ids[:max_tokens])
 
 
@@ -116,8 +129,9 @@ def build_samples(
                 left = budget - fim_overhead - middle_len
                 suffix = truncate_to_tokens(suffix, tokenizer, left // 2)
                 suffix_len = len(tokenizer.encode(suffix, add_special_tokens=False))
+                # prefix ตัดแบบ tail — เก็บบริบทติดกับ middle (ตรง build_eval_cases)
                 prefix = truncate_to_tokens(
-                    prefix, tokenizer, max(0, left - suffix_len)
+                    prefix, tokenizer, max(0, left - suffix_len), keep="tail"
                 )
                 body = format_psm(prefix, suffix, middle, fim_tokens=fim_tokens, eos="")
         else:
