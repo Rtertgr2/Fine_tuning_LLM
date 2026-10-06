@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
+import pytest
+
 from configs.safe_defaults import DEFAULT_MODEL_ID
+from core.contracts.benchmark import REPORT_KEYS, SCHEMA_VERSION
 from core.compress import report
 
 
@@ -39,29 +42,10 @@ def test_build_report_honest_nulls():
 
 def test_build_report_schema_keys():
     r = report.build_report(**_kwargs())
-    expected = {
-        "model",
-        "variant",
-        "optimization",
-        "backend",
-        "weight_bits",
-        "context_tokens",
-        "parameter_count",
-        "model_disk_mb",
-        "peak_vram_mb",
-        "kv_cache_mb",
-        "tokens_per_sec",
-        "prompt_tokens_per_sec",  # Review #8: pp rate เก็บแยกจาก gen
-        "latency_ms",
-        "load_time_ms",
-        "exact_match_pct",
-        "token_f1",
-        "syntax_pass_rate",
-        "execution_pass_rate",
-        "eval",  # Review #2: identity ของการทดสอบ (None เมื่อ --no-eval)
-        "timestamp",
-    }
-    assert expected <= set(r)
+    assert set(r) == REPORT_KEYS      # ล็อกเป๊ะ 23 คีย์ (แทน subset เดิม = แข็งขึ้น ไม่ใช่ลดเกณฑ์)
+    assert r["schema_version"] == SCHEMA_VERSION == "1.0"
+    assert r["peak_rss_mb"] is None   # BM-006 ยังไม่เขียน — null ก่อน (null-over-zero)
+    assert r["environment"] is None   # BM-010 ยังไม่เก็บ
     assert r["optimization"] == "quantization"
     datetime.fromisoformat(r["timestamp"])  # UTC ISO parse ได้
 
@@ -126,3 +110,18 @@ def test_format_table_without_baseline_has_no_delta():
     table = report.format_table(rows, None)
     assert "2.0" in table
     assert "(" not in table  # ไม่มี delta cell
+
+
+def test_write_report_rejects_invalid_and_stale_schema(tmp_path):
+    """gate ที่ขอบระบบ — report พัง = ไม่เขียนไฟล์เลย"""
+    bad = report.build_report(**_kwargs())
+    bad.pop("kv_cache_mb")
+    with pytest.raises(ValueError, match="kv_cache_mb"):
+        report.write_report(bad, tmp_path / "a.json")
+    assert not (tmp_path / "a.json").exists()
+
+    stale = report.build_report(**_kwargs())
+    stale["schema_version"] = "0.9"
+    with pytest.raises(ValueError, match="schema_version"):
+        report.write_report(stale, tmp_path / "b.json")
+    assert not (tmp_path / "b.json").exists()

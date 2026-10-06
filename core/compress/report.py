@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from configs.safe_defaults import DEFAULT_MODEL_ID, EVAL_DIR
+from core.contracts.benchmark import SCHEMA_VERSION, validate_report
 
 # baseline ของ Phase 5 — single source: configs.safe_defaults.EVAL_DIR (root/data_cache/eval)
 
@@ -56,10 +57,14 @@ def build_report(
         "execution_pass_rate": None,
         "eval": eval_identity,
         "timestamp": datetime.now(UTC).isoformat(),
+        "schema_version": SCHEMA_VERSION,
+        "peak_rss_mb": None,  # BM-006: CLI เติมค่าจริง Sprint 3 — วัดไม่ได้ = null
+        "environment": None,  # BM-010: {hardware, os, llama_cpp_commit} — เก็บจริง Sprint 3
     }
 
 
 def write_report(data: dict, path: Path) -> Path:
+    validate_report(data)  # gate ที่ขอบระบบ — report พัง = ไม่เขียนไฟล์
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
