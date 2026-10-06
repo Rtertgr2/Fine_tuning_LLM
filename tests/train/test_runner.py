@@ -75,34 +75,59 @@ def _mk_adapter_ckpt(path: Path, marker: str | None = None) -> None:
         (path / "marker").write_text(marker, encoding="utf-8")
 
 
-def test_latest_checkpoint_restores_old_after_interrupted_swap(tmp_path):
+def test_latest_checkpoint_does_not_recover_interrupted_swap(tmp_path):
+    """read-only contract: latest_checkpoint ห้ามแตะ disk — export/predict/eval เรียกได้
+    ระหว่างเทรน (race กับ AtomicSaveTrainer) → กู้ swap ค้างเป็นหน้าที่ resume_checkpoint"""
+    root = tmp_path / "out"
+    _mk_adapter_ckpt(root / "checkpoint-5.old")
+    with pytest.raises(ValueError, match="no checkpoint found"):
+        wa.latest_checkpoint(root)  # ไม่กู้ — ไม่มี base checkpoint ให้ scan เจอ
+    assert (root / "checkpoint-5.old").is_dir()  # artifact ยังอยู่ให้ resume path กู้ทีหลัง
+
+
+def test_latest_checkpoint_has_no_side_effects(tmp_path):
+    """Sec-12: .old/.saving ห้ามถูก rename/rmtree ระหว่าง scan — คิวให้ resume_checkpoint ทำคนเดียว"""
+    root = tmp_path / "out"
+    _mk_adapter_ckpt(root / "checkpoint-5.old", marker="old")
+    _mk_adapter_ckpt(root / "checkpoint-6.saving", marker="new")
+    (root / "checkpoint-10").mkdir(parents=True)
+    assert wa.latest_checkpoint(root) == root / "checkpoint-10"
+    # artifacts ต้องอยู่ที่เดิมเป๊ะ (นี่คือสิ่งที่ training process กำลังเขียนอยู่)
+    assert (root / "checkpoint-5.old").is_dir()
+    assert (root / "checkpoint-5.old" / "marker").read_text(encoding="utf-8") == "old"
+    assert (root / "checkpoint-6.saving").is_dir()
+    assert not (root / "checkpoint-5").exists()
+    assert not (root / "checkpoint-6").exists()
+
+
+def test_resume_checkpoint_restores_old_after_interrupted_swap(tmp_path):
     """Sec-12: SIGKILL หลัง final→*.old → resume ต้องกู้ .old กลับ (เดิม: checkpoint หายจากรัน เงียบ ๆ)"""
     root = tmp_path / "out"
     _mk_adapter_ckpt(root / "checkpoint-5.old")
-    assert wa.latest_checkpoint(root) == root / "checkpoint-5"
+    assert wa.resume_checkpoint(root) == str(root / "checkpoint-5")
     assert not (root / "checkpoint-5.old").exists()
 
 
-def test_latest_checkpoint_prefers_saving_over_old(tmp_path):
+def test_resume_checkpoint_prefers_saving_over_old(tmp_path):
     """Sec-12: มีทั้ง .old (เก่า) และ .saving (ใหม่ — super()._save เสร็จแล้วตอน commit เริ่ม) → ต้องเอา .saving"""
     root = tmp_path / "out"
     _mk_adapter_ckpt(root / "checkpoint-5.old", marker="old")
     _mk_adapter_ckpt(root / "checkpoint-5.saving", marker="new")
-    restored = wa.latest_checkpoint(root)
-    assert restored == root / "checkpoint-5"
-    assert (restored / "marker").read_text(encoding="utf-8") == "new"
+    restored = wa.resume_checkpoint(root)
+    assert restored == str(root / "checkpoint-5")
+    assert (root / "checkpoint-5" / "marker").read_text(encoding="utf-8") == "new"
     assert not (root / "checkpoint-5.old").exists()
     assert not (root / "checkpoint-5.saving").exists()
 
 
-def test_latest_checkpoint_does_not_trust_partial_saving(tmp_path):
+def test_resume_checkpoint_does_not_trust_partial_saving(tmp_path):
     """Sec-12: .saving ที่ไม่มี adapter files (first save โดน kill กลางเขียน) — ห้ามกู้ (อาจ partial)"""
     root = tmp_path / "out"
     saving = root / "checkpoint-7.saving"
     saving.mkdir(parents=True)
     (saving / "trainer_state.json").write_text("{}", encoding="utf-8")
-    with pytest.raises(ValueError, match="no checkpoint found"):   # ข้อความ raise เดิม (:479)
-        wa.latest_checkpoint(root)
+    assert wa.resume_checkpoint(root) is None  # ไม่มี checkpoint ที่ใช้ได้ → None (ไม่ raise)
+    assert saving.is_dir()  # ไม่แตะ .saving ที่เขียนไม่ครบ
 
 
 def _stub_training_env(

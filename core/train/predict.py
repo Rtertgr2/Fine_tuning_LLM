@@ -11,7 +11,12 @@ from pathlib import Path
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from core.data.fim import build_fim_prompt, ensure_fim_tokens
+from core.data.fim import (
+    build_fim_prompt,
+    decode_continuation,
+    ensure_fim_tokens,
+    encode_prompt,
+)
 from core.infra.ipc_bridge import error_msg, log_msg
 from core.train.args import validate_config
 from core.train.runner import latest_checkpoint
@@ -46,13 +51,13 @@ def predict_middle(config: dict, prefix: str, suffix: str, queue_) -> None:
         model.eval()
 
         prompt = build_fim_prompt(prefix, suffix, fim_tokens=fim_tokens)
-        inputs = tokenizer(prompt, return_tensors="pt")
+        inputs = encode_prompt(tokenizer, prompt)
         inputs = {k: v.to(device) for k, v in inputs.items()}
         output_ids = model.generate(
             **inputs, max_new_tokens=256, do_sample=False
         )
         continuation = output_ids[0][inputs["input_ids"].shape[1] :]
-        text = tokenizer.decode(continuation, skip_special_tokens=True)
+        text = decode_continuation(tokenizer, continuation, fim_tokens=fim_tokens)
         queue_.put(log_msg("INFO", text))
     except Exception as exc:
         queue_.put(error_msg(str(exc), traceback.format_exc()))

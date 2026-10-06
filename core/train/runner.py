@@ -52,7 +52,10 @@ def _has_adapter_files(ckpt: Path) -> bool:
 
 
 def _recover_interrupted_commit(root: Path) -> None:
-    """Sec-12: กู้ swap ที่ค้างกลางทาง (SIGKILL หลัง final→*.old) — เรียกก่อน scan ใน latest_checkpoint
+    """Sec-12: กู้ swap ที่ค้างกลางทาง (SIGKILL หลัง final→*.old) — เรียกก่อน scan ใน resume_checkpoint
+
+    ห้ามเรียกจาก `latest_checkpoint`: ผู้อ่านอย่าง export/predict/eval เรียกมันระหว่างเทรน
+    — rename/rmtree ตรง ๆ จะชนกับ `AtomicSaveTrainer` ที่กำลัง save/commit (race)
 
     - base หาย + มี .old และ .saving → เอา .saving (new — `super()._save` เสร็จแล้วตอน commit เริ่ม)
     - base หาย + มีแค่ .old → คืน .old (checkpoint จริงที่ใช้ได้)
@@ -86,7 +89,8 @@ def commit_checkpoint(tmp_dir: Path, final_dir: Path) -> None:
     ถ้า final มีของเดิมอยู่ → เก็บออกไปเป็น *.old ก่อน แล้ว rename เข้าที่ แล้วล้าง *.old
     (ถ้าโดน abort กลาง save → เหลือแค่ *.saving รอบถัดไปไม่แตะ checkpoint จริง)
     หมายเหตุ Sec-12: ถ้าโดน SIGKILL ระหว่าง 2 rename นี้ → resume path คืนผ่าน
-    `_recover_interrupted_commit` (เรียกใน latest_checkpoint) — sequence นี้ไม่แก้
+    `_recover_interrupted_commit` (เรียกใน resume_checkpoint — ไม่ใช่ latest_checkpoint:
+    ผู้อ่านฝั่ง export/predict/eval ต้องเรียกได้โดยไม่แตะ disk) — sequence นี้ไม่แก้
     หมายเหตุ (ตรงความจริงตาม source transformers): atomic ครอบเฉพาะ weights ที่เขียนผ่าน
     `_save` — optimizer/scheduler/trainer_state.json เขียนลง checkpoint dir ตรง ๆ ทีหลัง
     → adapter weights ปลอดภัยเสมอ แต่ resume อาจไม่ครบถ้าโดน kill กลางเขียน checkpoint
@@ -219,10 +223,11 @@ def run_training(config: dict, queue_) -> None:
 def latest_checkpoint(output_dir: str | Path) -> Path:
     """หา `checkpoint-<n>` ที่เลขมากสุดใน output_dir (numeric เทียบ ไม่ใช่ lexical)
 
+    read-only: ไม่แก้ไขอะไรบน disk (export/predict/eval เรียกพร้อม training ที่กำลังเขียน
+    checkpoint — กู้ swap ค้างเป็นหน้าที่ `resume_checkpoint`)
     ไม่มี checkpoint ที่ถูกต้อง → raise ValueError (ผู้เรียกตัดสินใจเอง)
     """
     root = Path(output_dir)
-    _recover_interrupted_commit(root)  # Sec-12: กู้ swap ค้างกลางทางก่อน scan (resume path)
     best: tuple[int, Path] | None = None
     if root.is_dir():
         for child in root.iterdir():
@@ -240,8 +245,14 @@ def latest_checkpoint(output_dir: str | Path) -> Path:
 
 
 def resume_checkpoint(output_dir: str | Path) -> str | None:
-    """M8: checkpoint ล่าสุดเป็น str สำหรับ `trainer.train(resume_from_checkpoint=...)` — ไม่มี → None"""
+    """M8: checkpoint ล่าสุดเป็น str สำหรับ `trainer.train(resume_from_checkpoint=...)` — ไม่มี → None
+
+    Sec-12: กู้ swap ค้างกลางทางที่นี่ (ก่อน scan) — เรียกก่อน `trainer.train` ใน
+    `run_training` เท่านั้น จังหวะนี้ไม่มี writer อื่น active (training process ตัวเอง)
+    """
+    root = Path(output_dir)
+    _recover_interrupted_commit(root)
     try:
-        return str(latest_checkpoint(output_dir))
+        return str(latest_checkpoint(root))
     except ValueError:
         return None

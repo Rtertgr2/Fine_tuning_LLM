@@ -42,6 +42,10 @@ from core.train.runner import run_training
 # (truncated pickle → EOFError/OSError/UnpicklingError) — ห้ามให้หลุดออกจาก tick() ไม่งั้น UI ค้างถาวร
 _DRAIN_ERRORS = (EOFError, OSError, pickle.UnpicklingError)
 
+# จำนวนบรรทัด log ล่าสุดที่ส่งต่อ tick — ประวัติครบเก็บใน `self._logs` (ดู property `logs`)
+# ถ้าส่งครบทุกบรรทุก tick → textbox ใหญ่ขึ้นเรื่อย ๆ ตลอด run (payload งอกทุกวินาที)
+LOG_TAIL_LINES = 200
+
 
 class TickSnapshot(NamedTuple):
     """ผลลัพธ์ 1 รอบของ `tick()` — ให้ dashboard นำไปอัปเดต widget (ห้ามตีความใน component)"""
@@ -78,6 +82,12 @@ class TrainingController:
     def training_active(self) -> bool:
         """True เมื่อมี process ที่ยังไม่จบ (ใช้ล็อกปุ่ม Predict/Merge/Start — §5 VRAM Contention)"""
         return self._process is not None and self._status not in TERMINAL_STATUSES
+
+    @property
+    def logs(self) -> list[str]:
+        """ประวัติ log ครบทุกบรรทัด (แยกจาก payload ที่ `tick()` ส่ง — bounded ที่ `LOG_TAIL_LINES`)"""
+        with self._lock:
+            return list(self._logs)
 
     # ------------------------------------------------------------------ #
     # Pre-flight (Tab 1)
@@ -160,6 +170,11 @@ class TrainingController:
         """drain queue จนหมดแบบ non-blocking → อัปเดตสถานะ → ตรวจ zombie — คืน snapshot ให้ UI
 
         ห้าม raise เด็ดขาด — ถ้า queue พัง (pipe โดน kill กลางเขียน) เก็บเป็น error แล้วหยุด drain
+
+        - `logs` = tail `LOG_TAIL_LINES` บรรทัดล่าสุด (กัน payload งอกทุก tick) — ประวัติครบ
+          เข้าถึงผ่าน property `logs`
+        - watchdog (zombie): เก็บ message/traceback ลง `_error`/`_logs` ด้วย — ไม่งั้น failure
+          อยู่แค่ใน snapshot แรก (~1 วิ) แล้วหายจาก banner
         """
         with self._lock:
             self._drain_queue()
@@ -171,14 +186,29 @@ class TrainingController:
             watchdog_text = None
             if watchdog is not None:
                 watchdog_text = f"{watchdog['message']}\n{watchdog['traceback']}"
+                # failure ต้องค้างใน snapshot ถัด ๆ ไปด้วย (error จริงจาก child ที่มาก่อน
+                # ละเอียดกว่า — ห้ามทับ)
+                if self._error is None:
+                    self._error = watchdog["message"]
+                self._append_log("ERROR", watchdog["message"])
+                if watchdog["traceback"]:
+                    self._logs.append(watchdog["traceback"])
                 # Sec-14: zombie = process ตายแล้ว — คืนสถานะ terminal ทันที
                 # (ไม่งั้น training_active ค้าง True = Start ล็อกถาวร)
+                self._process.join(0)  # reap dead child ก่อนทิ้ง reference
                 self._status = "aborted"
                 self._process = None
+            logs = list(self._logs)
+            if len(logs) > LOG_TAIL_LINES:
+                dropped = len(logs) - LOG_TAIL_LINES
+                logs = [
+                    f"[INFO] older lines not shown ({dropped} lines)",
+                    *logs[-LOG_TAIL_LINES:],
+                ]
             return TickSnapshot(
                 status=self._status,
                 metrics=list(self._metrics),
-                logs=list(self._logs),
+                logs=logs,
                 error=self._error,
                 watchdog=watchdog_text,
                 training_active=self.training_active,

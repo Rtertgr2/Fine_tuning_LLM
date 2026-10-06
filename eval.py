@@ -71,27 +71,13 @@ def _run_compare(eval_dir: Path) -> int:
         )
         return 2
 
-    if base.get("f1_kind") != fine.get("f1_kind"):
-        print(
-            f"Cannot compare: metric semantics differ (base f1_kind={base.get('f1_kind')!r} "
-            f"vs finetuned f1_kind={fine.get('f1_kind')!r}) — rerun both modes with the current build",
-            file=sys.stderr,
-        )
+    # identity gate (f1_kind + dataset) → `ev.check_comparable` ภายใน compare_results
+    # — CLI กับ UI ใช้ gate เดียวกัน (messages เดิม, rc 2 เหมือนเดิม)
+    try:
+        rows, qualitative = ev.compare_results(base, fine)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
         return 2
-    if (base.get("dataset_id"), base.get("dataset_column")) != (
-        fine.get("dataset_id"),
-        fine.get("dataset_column"),
-    ):
-        print(
-            f"Cannot compare: eval sets come from different datasets "
-            f"(base {base.get('dataset_id')!r}/{base.get('dataset_column')!r} vs "
-            f"finetuned {fine.get('dataset_id')!r}/{fine.get('dataset_column')!r}) — "
-            "rerun both modes on the same dataset",
-            file=sys.stderr,
-        )
-        return 2
-
-    rows, qualitative = ev.compare_results(base, fine)
     print(f"{'Metric':<14} {'Base':>8} {'Fine-tuned':>11} {'Δ':>8}")
     for label, b, f, delta in rows:
         print(f"{label:<14} {b:>8} {f:>11} {delta:>8}")
