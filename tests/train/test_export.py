@@ -25,6 +25,16 @@ def _config(**over) -> dict:
     return base
 
 
+@pytest.fixture(autouse=True)
+def _offline_hub(monkeypatch):
+    """hermetic ทั้งไฟล์ (review Important #2): แทน binding model_info ก่อนทุก test
+    — ไม่งั้น 3 tests เดิมเรียก hub จริงทุกรัน (ค้าง 90s+ บนเครือข่ายที่ drop packet)"""
+    def _offline(*_a, **_k):
+        raise OSError("offline")
+
+    monkeypatch.setattr(wa, "model_info", _offline)
+
+
 def test_save_adapter_only_copies(tmp_path):
     out = tmp_path / "run1"
     ckpt = out / "checkpoint-10"
@@ -70,7 +80,8 @@ def test_save_adapter_only_config_without_weights_raises(tmp_path):
     ckpt.mkdir(parents=True)
     (ckpt / "adapter_config.json").write_text("{}")
     with pytest.raises(ValueError):
-        wa.save_adapter_only(tmp_path / "run", config=_config())
+        # exports_dir ชี้ tmp_path — dest จริงของ test นี้ ไม่งั้น assert ล่าง check path ผิด (review Critical #1)
+        wa.save_adapter_only(tmp_path / "run", config=_config(), exports_dir=tmp_path / "exports")
     assert not (tmp_path / "exports" / "run" / "run_manifest.json").exists()  # fail ไม่ค้าง (acceptance #4)
 
 
@@ -107,18 +118,15 @@ def test_save_adapter_only_rejects_output_outside_sandbox(tmp_path, monkeypatch)
         wa.save_adapter_only(run, config=_config(), exports_dir=tmp_path / "exports")
 
 
-def test_save_adapter_only_writes_manifest(tmp_path, monkeypatch):
-    """acceptance #3: manifest เขียนที่ dest สำเร็จ + ออฟไลน์ → license null, ไม่แตะเน็ตจริง"""
+def test_save_adapter_only_writes_manifest(tmp_path):
+    """acceptance #3: manifest เขียนที่ dest สำเร็จ + ออฟไลน์ → license null, ไม่แตะเน็ตจริง
+    (hub ออฟไลน์มาจาก autouse fixture)"""
     out = tmp_path / "run1"
     ckpt = out / "checkpoint-10"
     ckpt.mkdir(parents=True)
     (ckpt / "adapter_config.json").write_text("{}")
     (ckpt / "adapter_model.safetensors").write_bytes(b"fake")
 
-    def _offline(*_a, **_k):
-        raise OSError("offline")
-
-    monkeypatch.setattr(wa, "model_info", _offline)   # hub ออฟไลน์
     dest = wa.save_adapter_only(out, config=_config(), exports_dir=tmp_path / "exports")
     m = json.loads((dest / "run_manifest.json").read_text(encoding="utf-8"))
     assert m["schema_version"] == "1.0"
@@ -129,3 +137,11 @@ def test_save_adapter_only_writes_manifest(tmp_path, monkeypatch):
     assert m["base_model"]["num_params"] is None
     assert m["export"]["dtype"] is None
     assert m["training"]["seed"] == SEED
+
+
+def test_export_suite_is_offline():
+    """hermeticity pin (review Important #2): wa.model_info ต้องถูกแทนด้วย fixture ตลอดเวลา
+    — ถ้าเป็น function ตัวเดียวกับ huggingface_hub จริง = test นี้เรียก hub จริงทุกครั้ง (ค้างได้บนเครือข่ายที่ drop packet)"""
+    import huggingface_hub
+
+    assert wa.model_info is not huggingface_hub.model_info
