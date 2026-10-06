@@ -23,6 +23,23 @@ def test_save_adapter_only_no_checkpoint_raises(tmp_path):
         wa.save_adapter_only(tmp_path / "empty_missing")
 
 
+def test_save_adapter_only_from_interrupted_swap_artifact(tmp_path):
+    """Sec-12: final หาย เหลือ `checkpoint-<n>.old` กลางทาง swap → export ต้องใช้ได้
+    (latest_checkpoint เลือก artifact ให้) และห้าม rename artifact"""
+    out = tmp_path / "run1"
+    ckpt = out / "checkpoint-10.old"
+    ckpt.mkdir(parents=True)
+    (ckpt / "adapter_config.json").write_text("{}")
+    (ckpt / "adapter_model.safetensors").write_bytes(b"fake")
+    exports = tmp_path / "exports"
+    dest = wa.save_adapter_only(out, exports_dir=exports)
+    assert dest == exports / "run1"
+    assert (dest / "adapter_config.json").exists()
+    assert (dest / "adapter_model.safetensors").read_bytes() == b"fake"
+    assert (out / "checkpoint-10.old").is_dir()  # read-only — ไม่ rename/rmtree
+    assert not (out / "checkpoint-10").exists()
+
+
 def test_merge_export_importable():
     assert callable(wa.merge_export)
 

@@ -366,9 +366,11 @@ def test_run_eval_stamps_metric_kind_and_identity(monkeypatch, tmp_path):
     assert result["f1_kind"] == "lcs"
     assert result["dataset_id"] == cfg["dataset_id"]
     assert result["dataset_column"] == cfg["dataset_column"]
+    assert result["prompt_version"] == ev.PROMPT_VERSION  # prompt-construction version
     on_disk = json.loads((tmp_path / "base.json").read_text(encoding="utf-8"))
     assert on_disk["f1_kind"] == "lcs"                     # JSON ที่เขียนก็มี key ครบ
     assert on_disk["dataset_id"] == cfg["dataset_id"]
+    assert on_disk["prompt_version"] == ev.PROMPT_VERSION
 
 
 def test_run_eval_no_cases_raises(monkeypatch, tmp_path):

@@ -9,7 +9,7 @@ from eval import main as cli_main
 
 
 def _result(mode: str, *, em: float, f1: float, n: int = 3, per_case=None) -> dict:
-    """รายงาน eval ตาม build ปัจจุบัน — มี identity markers ครบ (f1_kind + dataset)"""
+    """รายงาน eval ตาม build ปัจจุบัน — มี identity markers ครบ (f1_kind + dataset + prompt_version)"""
     return {
         "mode": mode,
         "n": n,
@@ -20,13 +20,15 @@ def _result(mode: str, *, em: float, f1: float, n: int = 3, per_case=None) -> di
         "f1_kind": F1_KIND,
         "dataset_id": "a/ds",
         "dataset_column": "content",
+        "prompt_version": ev.PROMPT_VERSION,
     }
 
 
 def _legacy(result: dict) -> dict:
-    """รายงาน build เก่า — ไม่มี f1_kind (identity marker ถูกเพิ่มทีหลัง)"""
+    """รายงาน build เก่า — ไม่มี f1_kind/prompt_version (identity markers ถูกเพิ่มทีหลัง)"""
     out = dict(result)
     out.pop("f1_kind", None)
+    out.pop("prompt_version", None)
     return out
 
 
@@ -99,6 +101,19 @@ def test_compare_rejects_both_reports_missing_f1_kind(tmp_path, capsys):
     eval_dir = _write_two(tmp_path, base, fine)
     assert cli_main(["--compare", "--eval-dir", eval_dir]) == 2
     assert "metric semantics differ" in capsys.readouterr().err
+
+
+def test_compare_rejects_mixed_prompt_versions(tmp_path, capsys):
+    """รายงาน build ก่อน/หลังเปลี่ยน prompt construction (FIM prefix tail) เทียบกันไม่ได้
+
+    base = build ปัจจุบัน (มี prompt_version), fine = build เก่า (ไม่มี marker) → ต้อง reject
+    """
+    base = _result("base", em=5.0, f1=0.2)
+    fine = _result("finetuned", em=6.0, f1=0.25)
+    fine.pop("prompt_version", None)
+    eval_dir = _write_two(tmp_path, base, fine)
+    assert cli_main(["--compare", "--eval-dir", eval_dir]) == 2
+    assert "prompt construction" in capsys.readouterr().err
 
 
 def test_compare_fail_on_tie(tmp_path, capsys):

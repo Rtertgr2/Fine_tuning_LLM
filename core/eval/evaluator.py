@@ -31,6 +31,10 @@ from core.data.dataset_builder import (
 
 EVAL_MAX_NEW_TOKENS: int = 256
 
+# เวอร์ชันการสร้าง prompt (เช่น FIM prefix ตัด tail) — รายงานต้องมีค่าเท่ากับค่านี้
+# ถึงจะเทียบกันได้ (`check_comparable`) — เปลี่ยนวิธีสร้าง prompt = bump ค่านี้
+PROMPT_VERSION: int = 1
+
 
 @dataclass(frozen=True)
 class EvalCase:
@@ -250,6 +254,9 @@ def run_eval(
         "f1_kind": F1_KIND,
         "dataset_id": config["dataset_id"],
         "dataset_column": config["dataset_column"],
+        # prompt-construction version — รายงานก่อนเปลี่ยน prompt (เช่น FIM prefix tail)
+        # ไม่มี key นี้ → check_comparable reject (เทียบคนละ prompt ไม่ได้)
+        "prompt_version": PROMPT_VERSION,
     }
     if len(cases) < n_cases:
         result["warning"] = (
@@ -268,6 +275,8 @@ def check_comparable(base: dict, finetuned: dict) -> None:
 
     - `f1_kind` ของ **ทั้งสองรายงาน** ต้องเท่ากับ `F1_KIND` ปัจจุบัน — legacy ไม่มี key
       (None == None) เดิมผ่าน check แบบเทียบสองรายงานด้วยกัน → ต้อง reject (คนละ build = คนละความหมาย)
+    - `prompt_version` ของทั้งสองต้องเท่ากับ `PROMPT_VERSION` ปัจจุบัน — รายงานก่อน/หลัง
+      เปลี่ยนวิธีสร้าง prompt (เช่น FIM prefix tail) คนละเงื่อนไข → delta โกหก
     - `(dataset_id, dataset_column)` ต้องตรงกัน — คนละชุดข้อมูล = delta โกหก
     ข้อความคงแบบเดิมที่ CLI เคยพิมพ์ (test แชร์ assertion ไว้)
     """
@@ -276,6 +285,16 @@ def check_comparable(base: dict, finetuned: dict) -> None:
             f"Cannot compare: metric semantics differ (base f1_kind={base.get('f1_kind')!r} "
             f"vs finetuned f1_kind={finetuned.get('f1_kind')!r}) — "
             "rerun both modes with the current build"
+        )
+    if (
+        base.get("prompt_version") != PROMPT_VERSION
+        or finetuned.get("prompt_version") != PROMPT_VERSION
+    ):
+        raise ValueError(
+            f"Cannot compare: prompt construction differs "
+            f"(base prompt_version={base.get('prompt_version')!r} "
+            f"vs finetuned prompt_version={finetuned.get('prompt_version')!r}, "
+            f"current={PROMPT_VERSION}) — rerun both modes with the current build"
         )
     if (base.get("dataset_id"), base.get("dataset_column")) != (
         finetuned.get("dataset_id"),

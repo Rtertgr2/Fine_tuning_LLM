@@ -154,7 +154,7 @@ def _make_handlers(controller) -> dict:
             f'**Status:** <span style="color:{color}">{snap.status.upper()}</span>'
         )
         fig = build_metric_plot(snap.metrics)
-        logs = "\n".join(snap.logs)  # Spec-5: live log ครบทุกบรรทัด (ไม่ตัด tail)
+        logs = "\n".join(snap.logs)  # snap.logs = LOG_TAIL_LINES บรรทัดล่าสุด + marker (ประวัติครบอยู่ที่ controller.logs)
         banners = []
         if snap.error:
             banners.append(

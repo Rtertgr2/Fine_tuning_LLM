@@ -5,6 +5,7 @@ from __future__ import annotations
 import gradio as gr
 
 from configs.safe_defaults import MAX_SEQ_LENGTH_CAP, MAX_SEQ_LENGTH_DEFAULT
+from core.eval.evaluator import PROMPT_VERSION
 from ui.dashboard import build_dashboard
 
 
@@ -140,6 +141,7 @@ class EvalController:
             "f1_kind": "lcs",
             "dataset_id": "a/ds",
             "dataset_column": "content",
+            "prompt_version": PROMPT_VERSION,
         }
 
     # methods ที่ build_dashboard ไม่เรียกตอนสร้าง แต่ใส่ครบตาม duck-type เดิม
@@ -303,6 +305,7 @@ def _write_eval_json(dirpath, mode, em, f1, n=3):
                 "f1_kind": "lcs",
                 "dataset_id": "a/ds",
                 "dataset_column": "content",
+                "prompt_version": PROMPT_VERSION,
             }
         ),
         encoding="utf-8",

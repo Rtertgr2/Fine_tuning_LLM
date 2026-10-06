@@ -60,5 +60,8 @@ def decode_continuation(tokenizer, continuation, *, fim_tokens: dict) -> str:
     `continuation` = ids ต่อท้าย input (iterable ของ int หรือ tensor 1 มิติ)
     """
     fim_ids = {tokenizer.convert_tokens_to_ids(t) for t in fim_tokens.values()}
+    # tensor element ทีละตัว (iterate/int บน device) = sync ทุก token → ดึงลง CPU เป็น list ครั้งเดียว
+    if hasattr(continuation, "tolist"):
+        continuation = continuation.tolist()
     kept = [int(t) for t in continuation if int(t) not in fim_ids]
     return tokenizer.decode(kept, skip_special_tokens=True)

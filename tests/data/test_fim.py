@@ -107,3 +107,28 @@ def test_decode_continuation_all_markers_is_empty():
     marker_ids = [tok.convert_tokens_to_ids(t) for t in FIM_ROLE_TOKENS.values()]
     text = wa.decode_continuation(tok, marker_ids, fim_tokens=FIM_ROLE_TOKENS)
     assert text == ""  # เฉย marker ล้วน → pred ว่าง (ไม่ใช่ string ของ marker)
+
+
+def test_decode_continuation_converts_tensor_to_list_once():
+    """tensor บน device: `int(t)`/iterate ต่อ element = sync ทุก token → ต้อง `.tolist()` ครั้งเดียวก่อนกรอง"""
+
+    class FakeTensor:
+        def __init__(self, data):
+            self._data = list(data)
+
+        def tolist(self):
+            return list(self._data)
+
+        def __iter__(self):
+            raise AssertionError("element-wise iteration (device sync per token)")
+
+        def __int__(self):
+            raise AssertionError("element-wise int() (device sync per token)")
+
+    tok = PromptTok()
+    marker_id = tok.convert_tokens_to_ids("<|fim_middle|>")
+    content_ids = [tok.convert_tokens_to_ids(w) for w in ("return", "1")]
+    text = wa.decode_continuation(
+        tok, FakeTensor([*content_ids, marker_id]), fim_tokens=FIM_ROLE_TOKENS
+    )
+    assert text == "return,1"  # กรอง marker เหมือน input เป็น list — แต่ sync ครั้งเดียว
